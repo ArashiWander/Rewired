@@ -3,15 +3,6 @@
 macro:
   category_weight: 0.30
   metrics:
-    vix:
-      source: yfinance
-      ticker: "^VIX"
-      thresholds:
-        green_max: 16.0
-        yellow_max: 22.0
-        orange_max: 30.0
-      weight: 0.30
-
     yield_curve_10y2y:
       source: fred
       series_id: T10Y2Y
@@ -19,7 +10,7 @@ macro:
         green_min: 0.5
         yellow_min: 0.0
         orange_min: -0.5
-      weight: 0.25
+      weight: 0.15
 
     unemployment:
       source: fred
@@ -29,7 +20,7 @@ macro:
         green_max_change: 0.0
         yellow_max_change: 0.3
         orange_max_change: 0.8
-      weight: 0.20
+      weight: 0.10
 
     gdp_growth:
       source: fred
@@ -38,7 +29,45 @@ macro:
         green_min: 2.0
         yellow_min: 1.0
         orange_min: 0.0
-      weight: 0.25
+      weight: 0.10
+
+    capacity_utilization:
+      source: fred
+      series_id: TCU
+      thresholds:
+        green_min: 78.0
+        yellow_min: 75.0
+        orange_min: 72.0
+      weight: 0.20
+
+    initial_jobless_claims:
+      source: fred
+      series_id: ICSA
+      # Weekly initial claims (raw number)
+      thresholds:
+        green_max: 220000
+        yellow_max: 260000
+        orange_max: 320000
+      weight: 0.15
+
+    cpi_yoy:
+      source: fred
+      series_id: CPIAUCSL
+      # Computed as YoY % change from CPI index
+      thresholds:
+        green_max: 2.5
+        yellow_max: 3.5
+        orange_max: 5.0
+      weight: 0.15
+
+    consumer_sentiment:
+      source: fred
+      series_id: UMCSENT
+      thresholds:
+        green_min: 80.0
+        yellow_min: 65.0
+        orange_min: 50.0
+      weight: 0.15
 
 sentiment:
   category_weight: 0.30

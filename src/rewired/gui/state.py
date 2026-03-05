@@ -1,4 +1,8 @@
-"""Dashboard data state - fetches and caches all data needed by the GUI."""
+"""Dashboard data state - fetches and caches all data needed by the GUI.
+
+Includes DataStatus tracking so the UI can surface errors and stale-data
+warnings instead of silently swallowing failures.
+"""
 
 from __future__ import annotations
 
@@ -15,18 +19,59 @@ _PIES_TTL = 300         # 5 minutes
 
 
 @dataclass
+class DataStatus:
+    """Status of a single data source."""
+
+    last_success: float = 0        # timestamp of last successful fetch
+    last_error: str = ""           # last error message (empty = OK)
+    last_error_ts: float = 0       # when the error occurred
+    is_stale: bool = False         # TTL expired and refresh failed
+
+    @property
+    def ok(self) -> bool:
+        """True when data is fresh and no unresolved error."""
+        return not self.last_error or self.last_success > self.last_error_ts
+
+    @property
+    def age_seconds(self) -> float:
+        """Seconds since last successful fetch (0 if never fetched)."""
+        if self.last_success == 0:
+            return 0
+        return time.time() - self.last_success
+
+    def mark_success(self) -> None:
+        self.last_success = time.time()
+        self.last_error = ""
+        self.is_stale = False
+
+    def mark_error(self, error: str) -> None:
+        self.last_error = error
+        self.last_error_ts = time.time()
+        self.is_stale = True
+
+
+@dataclass
 class DashboardState:
-    """Holds cached dashboard data with TTL-based refresh."""
+    """Holds cached dashboard data with TTL-based refresh and error tracking."""
 
     _signal_cache: object = field(default=None, repr=False)
     _signal_ts: float = 0
+    _signal_status: DataStatus = field(default_factory=DataStatus)
+
     _portfolio_cache: object = field(default=None, repr=False)
     _portfolio_ts: float = 0
+    _portfolio_status: DataStatus = field(default_factory=DataStatus)
+
     _pies_cache: list = field(default_factory=list, repr=False)
     _pies_ts: float = 0
+    _pies_status: DataStatus = field(default_factory=DataStatus)
+
     _suggestions_cache: list = field(default_factory=list, repr=False)
     _suggestions_ts: float = 0
+    _suggestions_status: DataStatus = field(default_factory=DataStatus)
+
     _universe_cache: object = field(default=None, repr=False)
+    _universe_status: DataStatus = field(default_factory=DataStatus)
 
     def get_signals(self):
         """Get signals, refreshing if stale."""
@@ -36,8 +81,9 @@ class DashboardState:
             from rewired.signals.engine import compute_signals
             self._signal_cache = compute_signals()
             self._signal_ts = time.time()
-        except Exception:
-            pass
+            self._signal_status.mark_success()
+        except Exception as e:
+            self._signal_status.mark_error(str(e))
         return self._signal_cache
 
     def get_portfolio(self):
@@ -51,8 +97,9 @@ class DashboardState:
                 refresh_prices(pf)
             self._portfolio_cache = pf
             self._portfolio_ts = time.time()
-        except Exception:
-            pass
+            self._portfolio_status.mark_success()
+        except Exception as e:
+            self._portfolio_status.mark_error(str(e))
         return self._portfolio_cache
 
     def get_pies(self) -> list[dict]:
@@ -60,7 +107,6 @@ class DashboardState:
         if self._pies_cache and (time.time() - self._pies_ts < _PIES_TTL):
             return self._pies_cache
         try:
-            from rewired.models.universe import load_universe
             from rewired.portfolio.sizing import calculate_pies_allocation
             sig = self.get_signals()
             pf = self.get_portfolio()
@@ -68,8 +114,9 @@ class DashboardState:
             if sig and pf and uni:
                 self._pies_cache = calculate_pies_allocation(pf, uni, sig)
                 self._pies_ts = time.time()
-        except Exception:
-            pass
+                self._pies_status.mark_success()
+        except Exception as e:
+            self._pies_status.mark_error(str(e))
         return self._pies_cache
 
     def get_suggestions(self) -> list[dict]:
@@ -77,7 +124,6 @@ class DashboardState:
         if self._suggestions_cache and (time.time() - self._suggestions_ts < _PIES_TTL):
             return self._suggestions_cache
         try:
-            from rewired.models.universe import load_universe
             from rewired.portfolio.sizing import calculate_suggestions
             sig = self.get_signals()
             pf = self.get_portfolio()
@@ -85,8 +131,9 @@ class DashboardState:
             if sig and pf and uni:
                 self._suggestions_cache = calculate_suggestions(pf, uni, sig)
                 self._suggestions_ts = time.time()
-        except Exception:
-            pass
+                self._suggestions_status.mark_success()
+        except Exception as e:
+            self._suggestions_status.mark_error(str(e))
         return self._suggestions_cache
 
     def get_signal_history(self) -> list[dict]:
@@ -107,9 +154,20 @@ class DashboardState:
         try:
             from rewired.models.universe import load_universe
             self._universe_cache = load_universe()
-        except Exception:
-            pass
+            self._universe_status.mark_success()
+        except Exception as e:
+            self._universe_status.mark_error(str(e))
         return self._universe_cache
+
+    def get_all_statuses(self) -> dict[str, DataStatus]:
+        """Return status of all data sources for the UI status bar."""
+        return {
+            "Signals": self._signal_status,
+            "Portfolio": self._portfolio_status,
+            "Pies": self._pies_status,
+            "Suggestions": self._suggestions_status,
+            "Universe": self._universe_status,
+        }
 
     def refresh_all(self) -> None:
         """Force refresh all caches by resetting timestamps."""

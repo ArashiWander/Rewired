@@ -106,3 +106,33 @@ def load_universe(config_path: Path | None = None) -> Universe:
         ))
 
     return Universe(stocks=stocks)
+
+
+def save_universe(universe: Universe, config_path: Path | None = None) -> None:
+    """Write the stock universe back to the YAML config file."""
+    if config_path is None:
+        config_path = _config_dir() / "universe.yaml"
+
+    entries = []
+    for s in universe.stocks:
+        entry: dict = {
+            "ticker": s.ticker,
+            "name": s.name,
+            "layer": f"L{s.layer.value}",
+            "tier": f"T{s.tier.value}",
+            "max_weight_pct": float(s.max_weight_pct),
+        }
+        if s.notes:
+            entry["notes"] = s.notes
+        entries.append(entry)
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        f.write("# Rewired Index Stock Universe\n")
+        f.write("# Each stock has a Layer (L1-L5) and Tier (T1-T4) coordinate\n\n")
+        yaml.dump(
+            {"stocks": entries},
+            f,
+            default_flow_style=False,
+            allow_unicode=True,
+            sort_keys=False,
+        )

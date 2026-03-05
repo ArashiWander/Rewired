@@ -195,7 +195,8 @@ def _fetch_capex_financials() -> str:
 def _run_gemini_capex_analysis(financial_data: str) -> dict:
     """Ask Gemini to analyze CAPEX trends and produce a structured score.
 
-    Uses Google Search grounding to access recent earnings news.
+    Grounds the analysis with SEC EDGAR 8-K filings and Google Search
+    to avoid hallucination from relying on model training data alone.
     Returns dict with score (1-4), color, and explanation.
     """
     from rewired.agent.gemini import generate, is_configured
@@ -203,25 +204,36 @@ def _run_gemini_capex_analysis(financial_data: str) -> dict:
     if not is_configured():
         return {"score": 2, "color": "yellow", "explanation": "Gemini not configured - defaulting to YELLOW"}
 
+    # Fetch real SEC filings to ground the analysis
+    edgar_text = "[SEC filing data unavailable]"
+    try:
+        from rewired.data.edgar import fetch_earnings_filings
+        edgar_text = fetch_earnings_filings()
+    except Exception:
+        pass
+
     prompt = f"""You are analyzing the AI Super Cycle CAPEX health for the Rewired Index investment framework.
 
-ACTUAL QUARTERLY FINANCIAL DATA:
+ACTUAL QUARTERLY FINANCIAL DATA (yfinance):
 {financial_data}
 
+RECENT SEC EARNINGS FILINGS (8-K):
+{edgar_text}
+
 YOUR TASK:
-Based on the financial data above AND your knowledge of recent earnings calls, management guidance,
-and AI infrastructure spending announcements, assess the health of the AI CAPEX super cycle.
+Based ONLY on the financial data and SEC filings provided above, plus any recent information
+from web search, assess the health of the AI CAPEX super cycle.
 
 Key questions to answer:
 1. Are the big four cloud providers (MSFT, GOOGL, AMZN, META) INCREASING or DECREASING their CAPEX?
-2. Is management guidance for future CAPEX positive, neutral, or negative?
+2. What does their most recent earnings guidance say about future CAPEX plans?
 3. Is AI training/inference cost declining (good for adoption) or is there spending fatigue?
 4. Are there any signs of CAPEX cuts or slowdown that would be a warning signal?
 
 OUTPUT FORMAT - You MUST respond with ONLY a valid JSON object, no other text:
 {{
   "score": <1-4 integer>,
-  "reasoning": "<2-3 sentence explanation of the CAPEX trend>",
+  "reasoning": "<2-3 sentence explanation of the CAPEX trend, citing specific data>",
   "capex_trend": "<accelerating|stable|decelerating|contracting>",
   "key_signal": "<the single most important data point driving your assessment>"
 }}
@@ -232,7 +244,11 @@ SCORING:
 - 3 = ORANGE: CAPEX growth decelerating, early warning signs of spending fatigue
 - 4 = RED: CAPEX cuts announced, investment cycle turning negative"""
 
-    raw = generate(prompt, system_instruction="You are a financial data analyst. Output ONLY valid JSON.")
+    raw = generate(
+        prompt,
+        system_instruction="You are a financial data analyst. Output ONLY valid JSON. Base your analysis strictly on the data provided and web search results.",
+        search_grounding=True,
+    )
 
     # Parse the JSON response
     try:

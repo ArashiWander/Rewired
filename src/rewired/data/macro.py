@@ -116,6 +116,105 @@ def _fred_readings(fred, now: datetime) -> list[SignalReading]:
     except Exception:
         pass
 
+    # Capacity Utilization (manufacturing health, leading indicator)
+    try:
+        data = fred.get_series("TCU", observation_start="2024-01-01")
+        if not data.empty:
+            value = float(data.dropna().iloc[-1])
+            if value > 78:
+                color = SignalColor.GREEN
+            elif value > 75:
+                color = SignalColor.YELLOW
+            elif value > 72:
+                color = SignalColor.ORANGE
+            else:
+                color = SignalColor.RED
+            readings.append(SignalReading(
+                name="Capacity Utilization",
+                value=value,
+                color=color,
+                timestamp=now,
+                source="FRED:TCU",
+                detail=f"Capacity: {value:.1f}% ({'strong' if value > 78 else 'moderate' if value > 75 else 'weak'})",
+            ))
+    except Exception:
+        pass
+
+    # Initial Jobless Claims (weekly, most timely labor signal)
+    try:
+        data = fred.get_series("ICSA", observation_start="2024-01-01")
+        if not data.empty:
+            value = float(data.dropna().iloc[-1])
+            value_k = value / 1000
+            if value < 220_000:
+                color = SignalColor.GREEN
+            elif value < 260_000:
+                color = SignalColor.YELLOW
+            elif value < 320_000:
+                color = SignalColor.ORANGE
+            else:
+                color = SignalColor.RED
+            readings.append(SignalReading(
+                name="Initial Jobless Claims",
+                value=value_k,
+                color=color,
+                timestamp=now,
+                source="FRED:ICSA",
+                detail=f"{value_k:.0f}K weekly claims",
+            ))
+    except Exception:
+        pass
+
+    # CPI Year-over-Year (inflation drives Fed policy)
+    try:
+        data = fred.get_series("CPIAUCSL", observation_start="2023-01-01")
+        if not data.empty and len(data) >= 13:
+            current = float(data.iloc[-1])
+            year_ago = float(data.iloc[-13])
+            yoy = ((current / year_ago) - 1) * 100
+            if yoy < 2.5:
+                color = SignalColor.GREEN
+            elif yoy < 3.5:
+                color = SignalColor.YELLOW
+            elif yoy < 5.0:
+                color = SignalColor.ORANGE
+            else:
+                color = SignalColor.RED
+            readings.append(SignalReading(
+                name="CPI YoY",
+                value=yoy,
+                color=color,
+                timestamp=now,
+                source="FRED:CPIAUCSL",
+                detail=f"CPI inflation: {yoy:.1f}% YoY",
+            ))
+    except Exception:
+        pass
+
+    # Consumer Sentiment (forward-looking spending intent)
+    try:
+        data = fred.get_series("UMCSENT", observation_start="2024-01-01")
+        if not data.empty:
+            value = float(data.dropna().iloc[-1])
+            if value > 80:
+                color = SignalColor.GREEN
+            elif value > 65:
+                color = SignalColor.YELLOW
+            elif value > 50:
+                color = SignalColor.ORANGE
+            else:
+                color = SignalColor.RED
+            readings.append(SignalReading(
+                name="Consumer Sentiment",
+                value=value,
+                color=color,
+                timestamp=now,
+                source="FRED:UMCSENT",
+                detail=f"UMich Sentiment: {value:.1f}",
+            ))
+    except Exception:
+        pass
+
     return readings
 
 
