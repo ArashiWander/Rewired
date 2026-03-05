@@ -7,31 +7,16 @@ import json
 from pydantic import BaseModel
 
 from rewired.agent.gemini import generate, is_configured
+from rewired.agent.prompts import (
+    PORTFOLIO_ANALYSIS,
+    REGIME_ASSESS,
+    SIGNAL_ANALYSIS,
+    STOCK_ANALYSIS,
+    SYSTEM_ANALYST,
+    SYSTEM_REGIME,
+)
 
-SYSTEM_PROMPT = """You are the Rewired Index AI analyst. You analyze market signals and portfolio positions
-within the Rewired Index framework - a 5-layer investment system for the AI revolution.
-
-The 5 Layers (L dimension):
-- L1 Physical Infrastructure: Semiconductors, energy, metals (NVDA, TSM, ASML, AMD)
-- L2 Digital Infrastructure: Cloud/NeoCloud, data assets (AMZN/AWS, MSFT/Azure)
-- L3 Core Intelligence: Full-stack AI companies (GOOGL, META, AAPL, TSLA) - highest certainty
-- L4 Dynamic Residual: AI applications, robotics, DeFi (PLTR, COIN)
-- L5 Frontier: Quantum computing, space economy (IONQ, RKLB) - lowest certainty
-
-The 4 Tiers (T dimension):
-- T1 Core: Long-term, high conviction holdings (40% allocation)
-- T2 Growth: Growth engine positions (30%)
-- T3 Thematic: Theme-based allocation (20%)
-- T4 Speculation: Speculative positions (10%)
-
-Signal Light System:
-- GREEN: Normal, full allocation
-- YELLOW: Divergence, reduce new positions (0.7x multiplier)
-- ORANGE: Weakening, defensive posture (0.4x multiplier)
-- RED: Deteriorating, retreat to T1 core only (0.1x multiplier)
-
-The portfolio uses EUR. The total capital is approximately 3100 EUR. This is a simulation account
-on Trading 212. Provide concise, actionable analysis. Be direct about risks. Use data, not opinions."""
+SYSTEM_PROMPT = SYSTEM_ANALYST
 
 
 # ── Market Regime Assessment (structured qualitative overlay) ────────────
@@ -68,38 +53,13 @@ def market_regime_assessment() -> MarketRegimeAssessment:
     portfolio_data = _get_portfolio_summary()
     pies_data = _get_pies_summary()
 
-    prompt = f"""Given the following Rewired Index data, produce a market regime assessment.
+    prompt = REGIME_ASSESS.format(
+        signal_data=signal_data,
+        portfolio_data=portfolio_data,
+        pies_data=pies_data,
+    )
 
-CURRENT SIGNALS:
-{signal_data}
-
-PORTFOLIO STATE:
-{portfolio_data}
-
-TARGET PIES ALLOCATION:
-{pies_data}
-
-Assess the overall market regime by considering ALL signals together - macro conditions,
-sentiment, and AI structural health. Consider cross-signal divergences (e.g. strong AI health
-but weak macro could signal a narrowing rally).
-
-Respond with ONLY valid JSON:
-{{
-  "regime": "<risk_on|neutral|risk_off|crisis>",
-  "confidence": <0.0-1.0>,
-  "reasoning": "<2-3 sentences explaining the regime and cross-signal dynamics>",
-  "actionable_insight": "<one specific, concrete action for this 3100 EUR T212 portfolio>",
-  "key_risk": "<the single most important risk to monitor this week>",
-  "regime_shift_probability": <0.0-1.0 probability of regime change in next 2 weeks>
-}}
-
-REGIME DEFINITIONS:
-- risk_on: Broad strength across signals, favorable for full allocation
-- neutral: Mixed signals, maintain current positions, limit new entries
-- risk_off: Deteriorating conditions, defensive positioning warranted
-- crisis: Multiple RED signals, capital preservation mode"""
-
-    raw = generate(prompt, system_instruction="You are a financial regime analyst. Output ONLY valid JSON.")
+    raw = generate(prompt, system_instruction=SYSTEM_REGIME, json_output=True)
 
     try:
         text = raw.strip()
@@ -148,25 +108,11 @@ def run_analysis() -> str:
     portfolio_data = _get_portfolio_summary()
     pies_data = _get_pies_summary()
 
-    prompt = f"""Analyze the current state of this Rewired Index portfolio and signals.
-
-CURRENT SIGNALS:
-{signal_data}
-
-PORTFOLIO STATE:
-{portfolio_data}
-
-TARGET PIES ALLOCATION (what the system recommends):
-{pies_data}
-
-Provide:
-1. A brief assessment of the current market environment (2-3 sentences)
-2. Whether the portfolio allocation aligns with the current signal color
-3. Gap analysis: which positions are overweight/underweight vs Pies targets
-4. Top 2-3 specific, actionable recommendations
-5. One key risk to watch this week
-
-Keep it concise - this is a quick daily briefing, not a research report."""
+    prompt = PORTFOLIO_ANALYSIS.format(
+        signal_data=signal_data,
+        portfolio_data=portfolio_data,
+        pies_data=pies_data,
+    )
 
     return generate(prompt, system_instruction=SYSTEM_PROMPT)
 
@@ -178,12 +124,7 @@ def analyze_signals_only() -> str:
 
     signal_data = _get_signal_summary()
 
-    prompt = f"""Current Rewired Index signals:
-
-{signal_data}
-
-In 3-5 sentences, explain what these signals mean for AI sector investment positioning right now.
-What is the most important thing to watch this week?"""
+    prompt = SIGNAL_ANALYSIS.format(signal_data=signal_data)
 
     return generate(prompt, system_instruction=SYSTEM_PROMPT)
 
@@ -200,15 +141,14 @@ def analyze_stock(ticker: str) -> str:
     if not stock:
         return f"[{ticker} is not in the Rewired Index universe.]"
 
-    prompt = f"""Analyze {stock.name} ({stock.ticker}) within the Rewired Index framework.
-
-Position in framework: Layer L{stock.layer.value}, Tier T{stock.tier.value}
-Max weight: {stock.max_weight_pct}%
-Notes: {stock.notes}
-
-Does this stock's current position and recent performance justify its L{stock.layer.value}/T{stock.tier.value} classification?
-Should we consider changing its tier? Any specific catalysts or risks to note?
-Keep it to 4-6 sentences."""
+    prompt = STOCK_ANALYSIS.format(
+        name=stock.name,
+        ticker=stock.ticker,
+        layer=stock.layer.value,
+        tier=stock.tier.value,
+        max_weight_pct=stock.max_weight_pct,
+        notes=stock.notes,
+    )
 
     return generate(prompt, system_instruction=SYSTEM_PROMPT)
 

@@ -35,13 +35,15 @@ def compute_signals() -> CompositeSignal:
         SignalCategory.AI_HEALTH: ai_health,
     }
 
-    overall = compute_composite(categories)
+    overall, veto_active = compute_composite(categories)
     now = datetime.now()
 
     # Build summary
     parts = []
     for cat, sig in categories.items():
         parts.append(f"{cat.value}: {sig.composite_color.value}")
+    if veto_active:
+        parts.append("AI_HEALTH_VETO=ACTIVE")
     summary = "; ".join(parts)
 
     result = CompositeSignal(
@@ -49,6 +51,7 @@ def compute_signals() -> CompositeSignal:
         overall_color=overall,
         timestamp=now,
         summary=summary,
+        veto_active=veto_active,
     )
 
     # Log signal state for history tracking

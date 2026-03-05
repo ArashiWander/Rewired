@@ -66,6 +66,7 @@ def _build_dashboard() -> None:
                 signals_tab = ui.tab(t("tab.signals"), icon="traffic")
                 portfolio_tab = ui.tab(t("tab.portfolio"), icon="account_balance_wallet")
                 analysis_tab = ui.tab(t("tab.analysis"), icon="psychology")
+                evaluation_tab = ui.tab(t("tab.evaluation"), icon="assessment")
                 monitor_tab = ui.tab(t("tab.monitor"), icon="monitor_heart")
 
             with ui.tab_panels(tabs, value=actions_tab).classes("w-full"):
@@ -86,7 +87,11 @@ def _build_dashboard() -> None:
                 with ui.tab_panel(analysis_tab):
                     analysis_container = ui.column().classes("w-full gap-4")
 
-                # ── Tab 5: Monitor ───────────────────────────────
+                # ── Tab 5: Evaluation ────────────────────────────
+                with ui.tab_panel(evaluation_tab):
+                    evaluation_container = ui.column().classes("w-full gap-4")
+
+                # ── Tab 6: Monitor ───────────────────────────────
                 with ui.tab_panel(monitor_tab):
                     monitor_container = ui.column().classes("w-full gap-4")
 
@@ -187,6 +192,11 @@ def _build_dashboard() -> None:
                 analysis_container.clear()
                 with analysis_container:
                     components.ai_analysis_panel()
+
+                # ── Populate Evaluation tab ───────────────────────
+                evaluation_container.clear()
+                with evaluation_container:
+                    components.evaluation_panel()
 
                 # ── Populate Monitor tab ─────────────────────────
                 monitor_container.clear()

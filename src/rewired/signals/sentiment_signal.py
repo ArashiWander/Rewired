@@ -1,4 +1,4 @@
-"""Sentiment signal calculator."""
+"""Sentiment signal calculator - delegates to boolean rules engine."""
 
 from __future__ import annotations
 
@@ -9,13 +9,12 @@ from rewired.models.signals import (
     CategorySignal,
     SignalCategory,
     SignalColor,
-    SIGNAL_SCORES,
-    score_to_color,
 )
+from rewired.signals.rules import evaluate_sentiment_rules
 
 
 def calculate_sentiment_signal() -> CategorySignal:
-    """Calculate composite sentiment signal."""
+    """Calculate sentiment signal using deterministic boolean rules."""
     readings = get_sentiment_readings()
     now = datetime.now()
 
@@ -23,21 +22,19 @@ def calculate_sentiment_signal() -> CategorySignal:
         return CategorySignal(
             category=SignalCategory.SENTIMENT,
             readings=[],
-            composite_color=SignalColor.YELLOW,
+            composite_color=SignalColor.ORANGE,
             timestamp=now,
-            explanation="No sentiment data available",
+            explanation="No sentiment data available - defaulting to ORANGE (defensive)",
+            rule_triggered="DATA_MISSING",
         )
 
-    weighted_score = sum(SIGNAL_SCORES[r.color] for r in readings) / len(readings)
-    composite = score_to_color(weighted_score)
-
-    worst = max(readings, key=lambda r: SIGNAL_SCORES[r.color])
-    explanation = worst.detail
+    color, explanation = evaluate_sentiment_rules(readings)
 
     return CategorySignal(
         category=SignalCategory.SENTIMENT,
         readings=readings,
-        composite_color=composite,
+        composite_color=color,
         timestamp=now,
         explanation=explanation,
+        rule_triggered=explanation.split(":")[0] if ":" in explanation else color.value,
     )

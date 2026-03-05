@@ -115,6 +115,7 @@ def _cloud_momentum(now: datetime) -> list[SignalReading]:
 # ── Gemini CAPEX Analysis (the Rewired-unique edge) ──────────────────────
 
 _CAPEX_CACHE_HOURS = 12  # Only call Gemini once per 12 hours
+_CAPEX_CACHE_VERSION = 2  # Increment to invalidate old caches (v1 had inverted scoring)
 
 
 def _load_capex_cache() -> dict | None:
@@ -125,6 +126,9 @@ def _load_capex_cache() -> dict | None:
     try:
         with open(cache_path, encoding="utf-8") as f:
             cache = json.load(f)
+        # Invalidate old cache versions (scoring polarity was flipped in v2)
+        if cache.get("schema_version", 1) < _CAPEX_CACHE_VERSION:
+            return None
         cached_at = datetime.fromisoformat(cache["timestamp"])
         if datetime.now() - cached_at < timedelta(hours=_CAPEX_CACHE_HOURS):
             return cache
@@ -136,6 +140,7 @@ def _load_capex_cache() -> dict | None:
 def _save_capex_cache(data: dict) -> None:
     """Save CAPEX analysis result to cache."""
     data["timestamp"] = datetime.now().isoformat()
+    data["schema_version"] = _CAPEX_CACHE_VERSION
     cache_path = get_data_dir() / "capex_cache.json"
     with open(cache_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
@@ -202,7 +207,8 @@ def _run_gemini_capex_analysis(financial_data: str) -> dict:
     from rewired.agent.gemini import generate, is_configured
 
     if not is_configured():
-        return {"score": 2, "color": "yellow", "explanation": "Gemini not configured - defaulting to YELLOW"}
+        return {"score": 3, "color": "yellow", "explanation": "Gemini not configured - defaulting to YELLOW",
+                "capex_trend": "unknown", "key_signal": "", "key_management_quote": "", "veto_triggered": False}
 
     # Fetch real SEC filings to ground the analysis
     edgar_text = "[SEC filing data unavailable]"
@@ -212,42 +218,19 @@ def _run_gemini_capex_analysis(financial_data: str) -> dict:
     except Exception:
         pass
 
-    prompt = f"""You are analyzing the AI Super Cycle CAPEX health for the Rewired Index investment framework.
+    from rewired.agent.prompts import CAPEX_HEALTH, SYSTEM_CAPEX
 
-ACTUAL QUARTERLY FINANCIAL DATA (yfinance):
-{financial_data}
-
-RECENT SEC EARNINGS FILINGS (8-K):
-{edgar_text}
-
-YOUR TASK:
-Based ONLY on the financial data and SEC filings provided above, plus any recent information
-from web search, assess the health of the AI CAPEX super cycle.
-
-Key questions to answer:
-1. Are the big four cloud providers (MSFT, GOOGL, AMZN, META) INCREASING or DECREASING their CAPEX?
-2. What does their most recent earnings guidance say about future CAPEX plans?
-3. Is AI training/inference cost declining (good for adoption) or is there spending fatigue?
-4. Are there any signs of CAPEX cuts or slowdown that would be a warning signal?
-
-OUTPUT FORMAT - You MUST respond with ONLY a valid JSON object, no other text:
-{{
-  "score": <1-4 integer>,
-  "reasoning": "<2-3 sentence explanation of the CAPEX trend, citing specific data>",
-  "capex_trend": "<accelerating|stable|decelerating|contracting>",
-  "key_signal": "<the single most important data point driving your assessment>"
-}}
-
-SCORING:
-- 1 = GREEN: CAPEX accelerating, strong AI investment cycle, positive management guidance
-- 2 = YELLOW: CAPEX stable or mixed signals, some uncertainty
-- 3 = ORANGE: CAPEX growth decelerating, early warning signs of spending fatigue
-- 4 = RED: CAPEX cuts announced, investment cycle turning negative"""
+    earnings_context = (
+        f"ACTUAL QUARTERLY FINANCIAL DATA (yfinance):\n{financial_data}\n\n"
+        f"RECENT SEC EARNINGS FILINGS (8-K):\n{edgar_text}"
+    )
+    prompt = CAPEX_HEALTH.format(earnings_context=earnings_context)
 
     raw = generate(
         prompt,
-        system_instruction="You are a financial data analyst. Output ONLY valid JSON. Base your analysis strictly on the data provided and web search results.",
+        system_instruction=SYSTEM_CAPEX,
         search_grounding=True,
+        json_output=True,
     )
 
     # Parse the JSON response
@@ -263,25 +246,30 @@ SCORING:
             text = text[4:].strip()
 
         result = json.loads(text)
-        score = int(result.get("score", 2))
+        score = int(result.get("score", 3))
         score = max(1, min(4, score))
 
-        color_map = {1: "green", 2: "yellow", 3: "orange", 4: "red"}
+        # New convention: 4=GREEN, 3=YELLOW, 2=ORANGE, 1=RED
+        color_map = {4: "green", 3: "yellow", 2: "orange", 1: "red"}
         return {
             "score": score,
             "color": color_map[score],
             "explanation": result.get("reasoning", ""),
             "capex_trend": result.get("capex_trend", "unknown"),
             "key_signal": result.get("key_signal", ""),
+            "key_management_quote": result.get("key_management_quote", ""),
+            "veto_triggered": bool(result.get("veto_triggered", False)),
         }
     except (json.JSONDecodeError, ValueError, TypeError):
         # If Gemini returns non-JSON, try to extract useful info
         return {
-            "score": 2,
+            "score": 3,
             "color": "yellow",
             "explanation": f"Agent analysis (unstructured): {raw[:200]}",
             "capex_trend": "unknown",
             "key_signal": "",
+            "key_management_quote": "",
+            "veto_triggered": False,
         }
 
 
@@ -295,7 +283,8 @@ def _capex_analysis(now: datetime) -> list[SignalReading]:
     cache = _load_capex_cache()
     if cache and "score" in cache:
         score = cache["score"]
-        color_map = {1: SignalColor.GREEN, 2: SignalColor.YELLOW, 3: SignalColor.ORANGE, 4: SignalColor.RED}
+        # New convention: 4=GREEN, 3=YELLOW, 2=ORANGE, 1=RED
+        color_map = {4: SignalColor.GREEN, 3: SignalColor.YELLOW, 2: SignalColor.ORANGE, 1: SignalColor.RED}
         return [SignalReading(
             name="AI CAPEX Health (Agent)",
             value=float(score),
@@ -303,6 +292,11 @@ def _capex_analysis(now: datetime) -> list[SignalReading]:
             timestamp=now,
             source="gemini:capex_analysis",
             detail=cache.get("explanation", "Cached analysis")[:100],
+            metadata={
+                "capex_trend": cache.get("capex_trend", "unknown"),
+                "veto_triggered": cache.get("veto_triggered", False),
+                "key_management_quote": cache.get("key_management_quote", ""),
+            },
         )]
 
     # Fetch real financial data
@@ -318,7 +312,8 @@ def _capex_analysis(now: datetime) -> list[SignalReading]:
     _save_capex_cache(result)
 
     score = result["score"]
-    color_map = {1: SignalColor.GREEN, 2: SignalColor.YELLOW, 3: SignalColor.ORANGE, 4: SignalColor.RED}
+    # New convention: 4=GREEN, 3=YELLOW, 2=ORANGE, 1=RED
+    color_map = {4: SignalColor.GREEN, 3: SignalColor.YELLOW, 2: SignalColor.ORANGE, 1: SignalColor.RED}
 
     readings = [SignalReading(
         name="AI CAPEX Health (Agent)",
@@ -327,6 +322,11 @@ def _capex_analysis(now: datetime) -> list[SignalReading]:
         timestamp=now,
         source="gemini:capex_analysis",
         detail=result.get("explanation", "")[:100],
+        metadata={
+            "capex_trend": result.get("capex_trend", "unknown"),
+            "veto_triggered": result.get("veto_triggered", False),
+            "key_management_quote": result.get("key_management_quote", ""),
+        },
     )]
 
     # Add CAPEX trend as a separate readable signal

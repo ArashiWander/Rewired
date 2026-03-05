@@ -12,23 +12,32 @@ from rewired.models.signals import (
 )
 
 # Category weights in composite (must sum to 1.0)
+# Blueprint: AI Health 50%, Macro 30%, Sentiment 20%
 CATEGORY_WEIGHTS = {
     SignalCategory.MACRO: 0.30,
-    SignalCategory.SENTIMENT: 0.30,
-    SignalCategory.AI_HEALTH: 0.40,
+    SignalCategory.SENTIMENT: 0.20,
+    SignalCategory.AI_HEALTH: 0.50,
 }
 
 
-def compute_composite(categories: dict[SignalCategory, CategorySignal]) -> SignalColor:
+def compute_composite(categories: dict[SignalCategory, CategorySignal]) -> tuple[SignalColor, bool]:
     """Compute overall signal color from category signals.
 
-    Uses weighted average with worst-of override:
-    - If any category is RED, composite cannot be better than ORANGE.
+    Uses weighted average with two override rules:
+    - AI Health RED triggers ABSOLUTE VETO -> global signal = RED.
+    - Any other category RED -> composite floor = ORANGE.
+
+    Returns (color, veto_active) tuple.
     """
     if not categories:
-        return SignalColor.YELLOW
+        return SignalColor.YELLOW, False
 
-    # Weighted score
+    # AI Health absolute veto: if AI Health is RED, entire signal = RED
+    ai_health = categories.get(SignalCategory.AI_HEALTH)
+    if ai_health and ai_health.composite_color == SignalColor.RED:
+        return SignalColor.RED, True
+
+    # Weighted score (higher = better)
     total_weight = 0.0
     weighted_score = 0.0
     for cat, signal in categories.items():
@@ -41,9 +50,13 @@ def compute_composite(categories: dict[SignalCategory, CategorySignal]) -> Signa
 
     color = score_to_color(weighted_score)
 
-    # Worst-of override: if any RED, composite is at least ORANGE
-    any_red = any(s.composite_color == SignalColor.RED for s in categories.values())
+    # Worst-of override: if any non-AI category is RED, floor = ORANGE
+    any_red = any(
+        s.composite_color == SignalColor.RED
+        for cat, s in categories.items()
+        if cat != SignalCategory.AI_HEALTH
+    )
     if any_red and color in (SignalColor.GREEN, SignalColor.YELLOW):
         color = SignalColor.ORANGE
 
-    return color
+    return color, False

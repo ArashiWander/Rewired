@@ -1,132 +1,144 @@
-# Signal thresholds and weights for Rewired Index
+# Rewired Index - Signal Rules Configuration
+# Boolean decision rules per the Agentic Decision System blueprint.
+# Rules are evaluated top-to-bottom (most defensive first).
+# Scoring: RED=1pt, ORANGE=2pts, YELLOW=3pts, GREEN=4pts (higher=better).
 
+# ── Category Weights (must sum to 1.0) ────────────────────────────────────
+weights:
+  ai_health: 0.50    # The moat - absolute veto power
+  macro: 0.30        # The water level
+  sentiment: 0.20    # The contrarian indicator
+
+# ── Macro Rules (Dimension 1: The Water Level) ───────────────────────────
 macro:
-  category_weight: 0.30
-  metrics:
-    yield_curve_10y2y:
+  # Data sources for the rules engine
+  data_sources:
+    ism_pmi:
       source: fred
-      series_id: T10Y2Y
-      thresholds:
-        green_min: 0.5
-        yellow_min: 0.0
-        orange_min: -0.5
-      weight: 0.15
-
+      series_id: NAPM           # ISM Manufacturing PMI
+    core_pce_mom:
+      source: fred
+      series_id: PCEPILFE       # Core PCE Price Index (compute MoM %)
+    retail_sales_mom:
+      source: fred
+      series_id: RSAFS          # Advance Retail Sales (compute MoM %)
+    yield_curve:
+      source: fred
+      series_id: T10Y2Y         # 10-Year minus 2-Year Treasury spread
     unemployment:
       source: fred
-      series_id: UNRATE
-      # Color based on 6-month change
-      thresholds:
-        green_max_change: 0.0
-        yellow_max_change: 0.3
-        orange_max_change: 0.8
-      weight: 0.10
-
+      series_id: UNRATE         # Civilian Unemployment Rate
+    nonfarm_payrolls:
+      source: fred
+      series_id: PAYEMS         # Total Nonfarm Payrolls (thousands)
+    # Supporting (informational, not used in boolean rules)
     gdp_growth:
       source: fred
       series_id: A191RL1Q225SBEA
-      thresholds:
-        green_min: 2.0
-        yellow_min: 1.0
-        orange_min: 0.0
-      weight: 0.10
-
     capacity_utilization:
       source: fred
       series_id: TCU
-      thresholds:
-        green_min: 78.0
-        yellow_min: 75.0
-        orange_min: 72.0
-      weight: 0.20
-
     initial_jobless_claims:
       source: fred
       series_id: ICSA
-      # Weekly initial claims (raw number)
-      thresholds:
-        green_max: 220000
-        yellow_max: 260000
-        orange_max: 320000
-      weight: 0.15
-
     cpi_yoy:
       source: fred
       series_id: CPIAUCSL
-      # Computed as YoY % change from CPI index
-      thresholds:
-        green_max: 2.5
-        yellow_max: 3.5
-        orange_max: 5.0
-      weight: 0.15
-
     consumer_sentiment:
       source: fred
       series_id: UMCSENT
-      thresholds:
-        green_min: 80.0
-        yellow_min: 65.0
-        orange_min: 50.0
-      weight: 0.15
 
+  rules:
+    red:
+      # Confirmed Recession: PMI < 48 for 2 consecutive months AND Retail Sales MoM negative
+      pmi_threshold: 48
+      pmi_consecutive_months: 2
+      retail_sales_negative: true
+    orange:
+      # Stagflation/Defense: Core PCE > 0.2% MoM AND Yield Curve inverted
+      pce_mom_threshold: 0.2
+      yield_curve_inverted: true
+    yellow:
+      # Slowdown/Transition: Unemployment rises > 0.2% in single month BUT PMI > 50
+      unemployment_mom_rise: 0.2
+      pmi_above: 50
+    green:
+      # Goldilocks: PMI > 50 AND disinflation intact (PCE <= 0.2% MoM)
+      pmi_above: 50
+      pce_mom_max: 0.2
+
+# ── Sentiment Rules (Dimension 2: The Contrarian Indicator) ──────────────
 sentiment:
-  category_weight: 0.30
-  metrics:
-    vix_level:
+  data_sources:
+    vix:
       source: yfinance
       ticker: "^VIX"
-      thresholds:
-        green_max: 16.0
-        yellow_max: 22.0
-        orange_max: 30.0
-      weight: 0.40
-
-    sp500_vs_200ma:
-      source: yfinance
-      ticker: "^GSPC"
-      # Percent above/below 200-day moving average
-      thresholds:
-        green_min: 2.0
-        yellow_min: -2.0
-        orange_min: -8.0
-      weight: 0.35
-
     vix_term_structure:
       source: yfinance
       tickers:
-        - "^VIX"
-        - "^VIX9D"
-      # Contango (VIX > VIX9D) = calm, backwardation = fear
-      weight: 0.25
+        - "^VIX"              # Spot VIX (30-day implied vol)
+        - "^VIX3M"            # 3-month VIX (longer-dated)
+      # Contango: VIX3M > VIX = normal/calm
+      # Backwardation: VIX > VIX3M = panic/hedging
 
+  rules:
+    red:
+      # Liquidity Crisis: VIX > 35 AND severe backwardation
+      vix_above: 35
+      term_structure_backwardation: true
+    orange:
+      # Deteriorating: VIX > 25 AND 5MA > 20MA (expanding volatility)
+      vix_above: 25
+      vix_trend_upward: true   # 5-day MA > 20-day MA
+    yellow:
+      # Divergence: VIX between 18-25
+      vix_low: 18
+      vix_high: 25
+    green:
+      # Stable/Complacent: VIX < 18 AND normal contango
+      vix_below: 18
+      term_structure_contango: true
+
+# ── AI Health Rules (Dimension 3: The Moat - Absolute Veto Power) ────────
 ai_health:
-  category_weight: 0.40
-  metrics:
+  data_sources:
+    capex_analysis:
+      source: gemini
+      grounded: true           # Uses EDGAR + Google Search grounding
+      cache_hours: 12
     semiconductor_momentum:
       source: yfinance
       ticker: SMH
-      # 50-day MA vs 200-day MA crossover
-      weight: 0.30
-
-    cloud_etf_momentum:
+    cloud_momentum:
       source: yfinance
       ticker: WCLD
-      # 50-day MA vs 200-day MA
-      weight: 0.20
+    hyperscaler_tickers:
+      - MSFT
+      - GOOGL
+      - AMZN
+      - META
 
-    hyperscaler_revenue_growth:
-      source: yfinance
-      tickers:
-        - MSFT
-        - GOOGL
-        - AMZN
-        - NVDA
-      # QoQ revenue growth trend
-      weight: 0.30
-
-    nvidia_relative_strength:
-      source: yfinance
-      ticker: NVDA
-      benchmark: "^GSPC"
+  rules:
+    red:
+      # VETO: ANY Big 4 CapEx CUT announced
+      capex_trend: contracting
+      veto_power: true
+    orange:
+      # ROI Anxiety: CapEx growing but YoY growth halved for 2 consecutive quarters
+      capex_trend: decelerating
+      management_keywords:
+        - "ROI pressure"
+        - "efficiency"
+        - "optimizing existing infrastructure"
+    yellow:
+      # Digestion: CapEx meets but doesn't beat estimates
+      capex_trend: stable
+    green:
+      # Arms Race: CapEx beats QoQ, strong forward guidance
+      capex_trend: accelerating
+      management_keywords:
+        - "compute supply constraints"
+        - "unprecedented demand"
+        - "aggressively increasing infrastructure"
       # NVDA 3-month return vs S&P 500 3-month return
       weight: 0.20

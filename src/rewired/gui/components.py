@@ -119,6 +119,12 @@ def _format_age(seconds: float) -> str:
 
 def pies_allocation_table(allocations: list[dict], composite) -> None:
     """Render the T212 Pies allocation target table."""
+    # ── Donut chart ──────────────────────────────────────
+    with ui.card().classes("w-full"):
+        ui.label(t("pies.chart_title")).classes("text-h6 q-mb-sm")
+        from rewired.gui.charts import pies_donut_chart
+        pies_donut_chart(allocations)
+
     with ui.card().classes("w-full"):
         overall = composite.overall_color.value
         hex_color = SIGNAL_COLORS.get(overall, "#888")
@@ -246,6 +252,103 @@ def suggestions_panel(suggestions: list[dict], composite) -> None:
 
         ui.table(columns=columns, rows=rows, row_key="ticker").classes("w-full")
 
+        # ── Execute button with confirmation modal ───────────────
+        if suggestions:
+            _execute_trades_button(suggestions, composite)
+
+
+def _execute_trades_button(suggestions: list[dict], composite) -> None:
+    """Render an Execute button that opens a confirmation modal before sending to IBKR."""
+
+    async def _show_confirm():
+        from rewired.broker.interface import OrderRequest, OrderSide
+
+        orders = []
+        for s in suggestions:
+            orders.append(OrderRequest(
+                ticker=s["ticker"],
+                side=OrderSide.BUY if s["action"] == "BUY" else OrderSide.SELL,
+                amount_eur=s["amount_eur"],
+                reason=s.get("reason", ""),
+                priority=s.get("priority", 0),
+            ))
+
+        with ui.dialog() as dialog, ui.card().classes("min-w-[600px]"):
+            ui.label(t("exec.confirm_title")).classes("text-h5 q-mb-sm")
+
+            color = composite.overall_color.value
+            hex_c = SIGNAL_COLORS.get(color, "#888")
+            ui.html(
+                f'<span style="color:{hex_c};font-weight:bold;font-size:1.1em">'
+                f'Signal: {color.upper()}</span>'
+            )
+            if composite.veto_active:
+                ui.label("AI HEALTH VETO ACTIVE").classes("text-red font-bold")
+
+            # Order summary table
+            cols = [
+                {"name": "side", "label": "Side", "field": "side", "align": "center"},
+                {"name": "ticker", "label": "Ticker", "field": "ticker", "align": "left"},
+                {"name": "amount", "label": "Amount EUR", "field": "amount", "align": "right"},
+                {"name": "reason", "label": "Reason", "field": "reason", "align": "left"},
+            ]
+            rows = []
+            for o in orders:
+                rows.append({
+                    "side": o.side.value,
+                    "ticker": o.ticker,
+                    "amount": f"{o.amount_eur:,.2f}",
+                    "reason": o.reason,
+                })
+            ui.table(columns=cols, rows=rows, row_key="ticker").classes("w-full q-my-md")
+
+            total_buy = sum(o.amount_eur for o in orders if o.side == OrderSide.BUY)
+            total_sell = sum(o.amount_eur for o in orders if o.side == OrderSide.SELL)
+            ui.label(f"Total BUY: {total_buy:,.2f} EUR   Total SELL: {total_sell:,.2f} EUR").classes("text-caption")
+
+            result_container = ui.column().classes("w-full gap-2 q-mt-md")
+
+            async def _do_execute():
+                result_container.clear()
+                with result_container:
+                    ui.label(t("exec.sending")).classes("text-grey")
+                try:
+                    from rewired.broker.ibkr import IBKRBroker
+                    brk = IBKRBroker()
+                    brk_results = await _run_in_thread(lambda: (brk.connect(), brk.execute_batch(orders))[-1])
+                    brk.disconnect()
+                    result_container.clear()
+                    with result_container:
+                        filled = sum(1 for r in brk_results if r.status.value == "filled")
+                        ui.label(f"{filled}/{len(brk_results)} orders filled").classes("text-green font-bold")
+                        for r in brk_results:
+                            color = "green" if r.status.value == "filled" else "red"
+                            ui.label(
+                                f"{r.side.value} {r.ticker}: {r.status.value.upper()} "
+                                f"({r.filled_shares:.4f} shares @ {r.avg_price:.2f})"
+                            ).style(f"color:{color}")
+                except ImportError:
+                    result_container.clear()
+                    with result_container:
+                        ui.label("ib_insync not installed. Install with: pip install -e \".[broker]\"").classes("text-red")
+                except Exception as e:
+                    result_container.clear()
+                    with result_container:
+                        ui.label(f"Broker error: {e}").classes("text-red")
+
+            with ui.row().classes("justify-end gap-3 q-mt-md"):
+                ui.button(t("exec.cancel"), on_click=dialog.close).props("flat")
+                ui.button(
+                    t("exec.confirm_btn"), on_click=_do_execute, icon="send"
+                ).props("color=negative")
+
+        dialog.open()
+
+    with ui.row().classes("q-mt-md justify-end"):
+        ui.button(
+            t("exec.btn_execute"), on_click=_show_confirm, icon="rocket_launch"
+        ).props("color=primary outline")
+
 
 # ── Tab 2: Signals ───────────────────────────────────────────────────────────
 
@@ -343,7 +446,14 @@ def signal_drilldown(composite) -> None:
 
 
 def signal_history_timeline(history: list[dict]) -> None:
-    """Render the signal history as a list."""
+    """Render the signal history as a chart + table."""
+    # ── ECharts timeline ─────────────────────────────────
+    if history:
+        with ui.card().classes("w-full"):
+            ui.label(t("signal.chart_title")).classes("text-h6 q-mb-sm")
+            from rewired.gui.charts import signal_history_chart
+            signal_history_chart(history)
+
     with ui.card().classes("w-full"):
         ui.label(t("signal.history_title")).classes("text-h5 q-mb-md")
 
@@ -374,7 +484,14 @@ def signal_history_timeline(history: list[dict]) -> None:
 
 
 def portfolio_table(portfolio) -> None:
-    """Render portfolio positions with P&L."""
+    """Render portfolio positions with treemap + table."""
+    # ── Treemap chart ────────────────────────────────────
+    if portfolio and portfolio.positions:
+        with ui.card().classes("w-full"):
+            ui.label(t("portfolio.treemap_title")).classes("text-h6 q-mb-sm")
+            from rewired.gui.charts import portfolio_weight_treemap
+            portfolio_weight_treemap(portfolio)
+
     with ui.card().classes("w-full"):
         ui.label(t("portfolio.title")).classes("text-h5 q-mb-md")
 
@@ -420,8 +537,14 @@ def _portfolio_summary(portfolio) -> None:
 
 
 def universe_matrix(universe) -> None:
-    """Render the LxT Universe Matrix as a table."""
+    """Render the LxT Universe Matrix as a heatmap + table."""
     from rewired.models.universe import Layer, Tier
+
+    # ── Heatmap chart ────────────────────────────────────
+    with ui.card().classes("w-full"):
+        ui.label(t("universe.heatmap_title")).classes("text-h6 q-mb-sm")
+        from rewired.gui.charts import lxt_heatmap
+        lxt_heatmap(universe)
 
     with ui.card().classes("w-full"):
         ui.label(t("universe.title")).classes("text-h5 q-mb-md")
@@ -1006,6 +1129,154 @@ def universe_management_card(on_change=None) -> None:
                 ui.button(
                     t("unimgmt.btn_remove"), on_click=_remove, icon="delete",
                 ).props("flat dense size=sm color=negative")
+
+
+# ── Tab 6: Evaluation ────────────────────────────────────────────────────────
+
+
+def evaluation_panel() -> None:
+    """Render the per-company evaluation panel with on-demand Gemini evaluation."""
+    with ui.card().classes("w-full"):
+        ui.label(t("eval.title")).classes("text-h5 q-mb-md")
+        ui.markdown(t("eval.intro"))
+
+        eval_output = ui.column().classes("w-full gap-4")
+
+        async def run_single_eval():
+            ticker_val = (ticker_in.value or "").strip().upper()
+            if not ticker_val:
+                return
+            eval_output.clear()
+            with eval_output:
+                ui.label(t("eval.running", ticker=ticker_val)).classes("text-grey")
+            try:
+                from rewired.agent.evaluator import evaluate_stock_by_ticker
+                ev = await _run_in_thread(evaluate_stock_by_ticker, ticker_val)
+                eval_output.clear()
+                with eval_output:
+                    _render_single_evaluation(ev)
+            except Exception as e:
+                eval_output.clear()
+                with eval_output:
+                    ui.label(t("eval.error", err=str(e))).classes("text-red")
+
+        async def run_universe_eval():
+            eval_output.clear()
+            with eval_output:
+                ui.label(t("eval.running_all")).classes("text-grey")
+            try:
+                from rewired.agent.evaluator import evaluate_universe
+                batch = await _run_in_thread(evaluate_universe)
+                eval_output.clear()
+                with eval_output:
+                    _render_evaluation_batch(batch)
+            except Exception as e:
+                eval_output.clear()
+                with eval_output:
+                    ui.label(t("eval.error", err=str(e))).classes("text-red")
+
+        with ui.row().classes("items-end gap-3 q-mt-sm"):
+            ticker_in = ui.input(
+                t("eval.ticker_label"), placeholder="NVDA"
+            ).classes("w-48")
+            ui.button(
+                t("eval.btn_single"), on_click=run_single_eval, icon="person_search"
+            ).props("color=primary")
+            ui.button(
+                t("eval.btn_universe"), on_click=run_universe_eval, icon="groups"
+            ).props("outline")
+
+
+def _render_single_evaluation(ev) -> None:
+    """Render a single CompanyEvaluation with radar chart + details."""
+    from rewired.gui.charts import evaluation_radar_chart
+
+    with ui.row().classes("w-full gap-4 items-start"):
+        with ui.column().classes("w-1/2"):
+            evaluation_radar_chart(ev, height="300px")
+        with ui.column().classes("w-1/2 gap-2"):
+            score = ev.composite_score
+            if score >= 7.5:
+                style = "color:#22c55e"
+            elif score >= 5.0:
+                style = "color:#eab308"
+            elif score >= 3.0:
+                style = "color:#f97316"
+            else:
+                style = "color:#ef4444"
+
+            ui.label(f"{ev.ticker}").classes("text-h5")
+            ui.html(f'<span style="{style};font-size:1.5em;font-weight:bold">{ev.composite_score:.1f}/10</span>')
+            ui.label(
+                f"Fundamental: {ev.fundamental_score:.1f}  |  "
+                f"AI-Relevance: {ev.ai_relevance_score:.1f}  |  "
+                f"Moat: {ev.moat_score:.1f}  |  "
+                f"Management: {ev.management_score:.1f}"
+            ).classes("text-caption")
+            ui.label(f"Conviction: {ev.conviction_level.upper()}  |  "
+                      f"Earnings: {ev.earnings_trend}  |  "
+                      f"Data: {ev.data_quality}").classes("text-caption text-grey")
+
+            if not ev.tier_appropriate and ev.suggested_tier_change:
+                ui.label(f"Tier mismatch: suggest {ev.suggested_tier_change}").style("color:#f97316")
+            if ev.biggest_catalyst:
+                ui.html(f'<span style="color:#22c55e">Catalyst:</span> {ev.biggest_catalyst}')
+            if ev.biggest_risk:
+                ui.html(f'<span style="color:#ef4444">Risk:</span> {ev.biggest_risk}')
+            if ev.reasoning:
+                ui.label(ev.reasoning).classes("text-caption text-grey q-mt-sm")
+
+
+def _render_evaluation_batch(batch) -> None:
+    """Render a full batch of evaluations with bar chart + table."""
+    from rewired.gui.charts import evaluation_bar_chart
+
+    if batch.evaluations:
+        evaluation_bar_chart(batch.evaluations, height="380px")
+
+    # Summary table
+    columns = [
+        {"name": "ticker", "label": "Ticker", "field": "ticker", "align": "left", "sortable": True},
+        {"name": "composite", "label": "Score", "field": "composite", "align": "right", "sortable": True},
+        {"name": "fundamental", "label": "Fund.", "field": "fundamental", "align": "right"},
+        {"name": "ai_rel", "label": "AI-Rel.", "field": "ai_rel", "align": "right"},
+        {"name": "moat", "label": "Moat", "field": "moat", "align": "right"},
+        {"name": "mgmt", "label": "Mgmt", "field": "mgmt", "align": "right"},
+        {"name": "conviction", "label": "Conv.", "field": "conviction", "align": "center"},
+        {"name": "trend", "label": "Trend", "field": "trend", "align": "center"},
+        {"name": "tier_ok", "label": "Tier OK", "field": "tier_ok", "align": "center"},
+    ]
+
+    rows = []
+    for ev in sorted(batch.evaluations, key=lambda e: e.composite_score, reverse=True):
+        rows.append({
+            "ticker": ev.ticker,
+            "composite": f"{ev.composite_score:.1f}",
+            "fundamental": f"{ev.fundamental_score:.1f}",
+            "ai_rel": f"{ev.ai_relevance_score:.1f}",
+            "moat": f"{ev.moat_score:.1f}",
+            "mgmt": f"{ev.management_score:.1f}",
+            "conviction": ev.conviction_level.upper(),
+            "trend": ev.earnings_trend,
+            "tier_ok": "Yes" if ev.tier_appropriate else ev.suggested_tier_change or "No",
+        })
+
+    ui.table(columns=columns, rows=rows, row_key="ticker").classes("w-full q-mt-md")
+
+    if batch.errors:
+        ui.label(f"Errors: {', '.join(batch.errors.keys())}").classes("text-caption text-grey q-mt-sm")
+    ui.label(
+        f"Success rate: {batch.success_rate:.0%} "
+        f"({len(batch.evaluations)}/{len(batch.evaluations) + len(batch.errors)})"
+    ).classes("text-caption text-grey")
+
+    # Tier mismatches
+    mismatches = batch.tier_mismatches()
+    if mismatches:
+        with ui.card().classes("w-full q-mt-md"):
+            ui.label(t("eval.tier_mismatches")).classes("text-h6")
+            for ev in mismatches:
+                ui.label(f"{ev.ticker}: suggest {ev.suggested_tier_change} \u2014 {ev.reasoning[:80]}").classes("text-caption")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

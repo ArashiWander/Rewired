@@ -19,6 +19,8 @@ dependencies = [
     "rich>=13.0",
     "schedule>=1.2",
     "pydantic>=2.0",
+    "requests>=2.31",
+    "rapidfuzz>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +30,9 @@ dev = [
 ]
 gui = [
     "nicegui>=2.0",
+]
+broker = [
+    "ib_insync>=0.9.86",
 ]
 
 [project.scripts]

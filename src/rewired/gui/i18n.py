@@ -884,4 +884,86 @@ _STRINGS: dict[str, dict[Lang, str]] = {
         Lang.EN: "Saved changes for {ticker}.",
         Lang.ZH: "\u5df2\u4fdd\u5b58 {ticker} \u7684\u66f4\u6539\u3002",
     },
+
+    # ── Tab 6: Evaluation ────────────────────────────────────────────
+    "tab.evaluation": {
+        Lang.EN: "Evaluation",
+        Lang.ZH: "\u8bc4\u4f30",
+    },
+    "eval.title": {
+        Lang.EN: "Per-Company Gemini Evaluation",
+        Lang.ZH: "\u5355\u516c\u53f8 Gemini \u8bc4\u4f30",
+    },
+    "eval.intro": {
+        Lang.EN: "Run on-demand AI evaluation for a single stock or the full universe. Results are produced by Gemini with `temperature=0`.",
+        Lang.ZH: "\u6309\u9700\u8fd0\u884c\u5355\u53ea\u80a1\u7968\u6216\u5168\u80a1\u7968\u6c60\u7684 AI \u8bc4\u4f30\u3002\u7ed3\u679c\u7531 Gemini (`temperature=0`) \u751f\u6210\u3002",
+    },
+    "eval.ticker_label": {
+        Lang.EN: "Ticker",
+        Lang.ZH: "\u80a1\u7968\u4ee3\u7801",
+    },
+    "eval.btn_single": {
+        Lang.EN: "Evaluate Stock",
+        Lang.ZH: "\u8bc4\u4f30\u80a1\u7968",
+    },
+    "eval.btn_universe": {
+        Lang.EN: "Evaluate Universe",
+        Lang.ZH: "\u8bc4\u4f30\u5168\u90e8",
+    },
+    "eval.running": {
+        Lang.EN: "Evaluating {ticker}\u2026",
+        Lang.ZH: "\u6b63\u5728\u8bc4\u4f30 {ticker}\u2026",
+    },
+    "eval.running_all": {
+        Lang.EN: "Running universe evaluation (this may take a minute)\u2026",
+        Lang.ZH: "\u6b63\u5728\u8fd0\u884c\u5168\u80a1\u7968\u6c60\u8bc4\u4f30\uff08\u53ef\u80fd\u9700\u8981\u4e00\u5206\u949f\uff09\u2026",
+    },
+    "eval.error": {
+        Lang.EN: "Evaluation failed: {err}",
+        Lang.ZH: "\u8bc4\u4f30\u5931\u8d25\uff1a{err}",
+    },
+    "eval.tier_mismatches": {
+        Lang.EN: "Tier Mismatches",
+        Lang.ZH: "\u5c42\u7ea7\u4e0d\u5339\u914d",
+    },
+
+    # ── Chart titles ─────────────────────────────────────────────────
+    "pies.chart_title": {
+        Lang.EN: "Allocation Breakdown",
+        Lang.ZH: "\u914d\u7f6e\u5206\u5e03",
+    },
+    "signal.chart_title": {
+        Lang.EN: "Signal History",
+        Lang.ZH: "\u4fe1\u53f7\u5386\u53f2",
+    },
+    "portfolio.treemap_title": {
+        Lang.EN: "Position Weights",
+        Lang.ZH: "\u6301\u4ed3\u6743\u91cd",
+    },
+    "universe.heatmap_title": {
+        Lang.EN: "Layer \u00d7 Tier Heatmap",
+        Lang.ZH: "\u5c42 \u00d7 \u7ea7 \u70ed\u529b\u56fe",
+    },
+
+    # \u2500\u2500 Execution modal \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    "exec.btn_execute": {
+        Lang.EN: "Execute Trades",
+        Lang.ZH: "\u6267\u884c\u4ea4\u6613",
+    },
+    "exec.confirm_title": {
+        Lang.EN: "Confirm Trade Execution",
+        Lang.ZH: "\u786e\u8ba4\u6267\u884c\u4ea4\u6613",
+    },
+    "exec.confirm_btn": {
+        Lang.EN: "Execute via IBKR",
+        Lang.ZH: "\u901a\u8fc7 IBKR \u6267\u884c",
+    },
+    "exec.cancel": {
+        Lang.EN: "Cancel",
+        Lang.ZH: "\u53d6\u6d88",
+    },
+    "exec.sending": {
+        Lang.EN: "Sending orders to IBKR\u2026",
+        Lang.ZH: "\u6b63\u5728\u53d1\u9001\u8ba2\u5355\u5230 IBKR\u2026",
+    },
 }

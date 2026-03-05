@@ -206,6 +206,95 @@ def print_regime_assessment(assessment) -> None:
     console.print(f"  [dim]Regime shift probability (2wk): {assessment.regime_shift_probability:.0%}[/dim]\n")
 
 
+def print_evaluation(evaluation) -> None:
+    """Display a single company evaluation."""
+    from rewired.models.evaluation import CompanyEvaluation
+
+    ev: CompanyEvaluation = evaluation
+    score = ev.composite_score
+    if score >= 7.5:
+        style = "bold green"
+    elif score >= 5.0:
+        style = "bold yellow"
+    elif score >= 3.0:
+        style = "bold rgb(255,165,0)"
+    else:
+        style = "bold red"
+
+    console.print(f"\n[bold]{ev.ticker}[/bold]  Composite: [{style}]{ev.composite_score:.1f}/10[/{style}]")
+    console.print(f"  Fundamentals: {ev.fundamental_score:.1f}  AI-Relevance: {ev.ai_relevance_score:.1f}  "
+                  f"Moat: {ev.moat_score:.1f}  Management: {ev.management_score:.1f}")
+    console.print(f"  Conviction: {ev.conviction_level.upper()}  Earnings: {ev.earnings_trend}  "
+                  f"Data: {ev.data_quality}")
+    if not ev.tier_appropriate and ev.suggested_tier_change:
+        console.print(f"  [bold rgb(255,165,0)]Tier mismatch:[/bold rgb(255,165,0)] suggest {ev.suggested_tier_change}")
+    if ev.biggest_catalyst:
+        console.print(f"  [green]Catalyst:[/green] {ev.biggest_catalyst}")
+    if ev.biggest_risk:
+        console.print(f"  [red]Risk:[/red] {ev.biggest_risk}")
+    if ev.reasoning:
+        console.print(f"  [dim]{ev.reasoning}[/dim]")
+    console.print()
+
+
+def print_evaluation_batch(batch) -> None:
+    """Display a batch of company evaluations as a summary table."""
+    from rewired.models.evaluation import EvaluationBatch
+
+    b: EvaluationBatch = batch
+    table = Table(title="Rewired Index - Company Evaluations", show_lines=True)
+    table.add_column("Ticker", style="bold", width=8)
+    table.add_column("Composite", justify="right", width=10)
+    table.add_column("Fund.", justify="right", width=6)
+    table.add_column("AI-Rel.", justify="right", width=7)
+    table.add_column("Moat", justify="right", width=6)
+    table.add_column("Mgmt", justify="right", width=6)
+    table.add_column("Conv.", justify="center", width=7)
+    table.add_column("Trend", justify="center", width=8)
+    table.add_column("Tier OK", justify="center", width=7)
+
+    for ev in sorted(b.evaluations, key=lambda e: e.composite_score, reverse=True):
+        score = ev.composite_score
+        if score >= 7.5:
+            style = "green"
+        elif score >= 5.0:
+            style = "yellow"
+        elif score >= 3.0:
+            style = "rgb(255,165,0)"
+        else:
+            style = "red"
+
+        tier_ok = "[green]Yes[/green]" if ev.tier_appropriate else f"[rgb(255,165,0)]{ev.suggested_tier_change}[/rgb(255,165,0)]"
+        conv_style = {"high": "green", "medium": "yellow", "low": "red"}.get(ev.conviction_level, "")
+
+        table.add_row(
+            ev.ticker,
+            f"[{style}]{ev.composite_score:.1f}[/{style}]",
+            f"{ev.fundamental_score:.1f}",
+            f"{ev.ai_relevance_score:.1f}",
+            f"{ev.moat_score:.1f}",
+            f"{ev.management_score:.1f}",
+            f"[{conv_style}]{ev.conviction_level.upper()}[/{conv_style}]",
+            ev.earnings_trend,
+            tier_ok,
+        )
+
+    console.print()
+    console.print(table)
+
+    if b.errors:
+        console.print(f"\n[dim]Errors: {', '.join(b.errors.keys())}[/dim]")
+    console.print(f"[dim]Success rate: {b.success_rate:.0%} ({len(b.evaluations)}/{len(b.evaluations) + len(b.errors)})[/dim]\n")
+
+    # Show tier mismatches
+    mismatches = b.tier_mismatches()
+    if mismatches:
+        console.print("[bold]Tier Mismatches:[/bold]")
+        for ev in mismatches:
+            console.print(f"  {ev.ticker}: suggest {ev.suggested_tier_change} — {ev.reasoning[:80]}")
+        console.print()
+
+
 def print_signal_history() -> None:
     """Display signal color change history."""
     import json
@@ -244,6 +333,111 @@ def print_signal_history() -> None:
             from_text,
             to_text,
             entry.get("summary", ""),
+        )
+
+    console.print()
+    console.print(table)
+    console.print()
+
+
+# ── Execution & Pipeline output ──────────────────────────────────────────
+
+
+def print_execution_plan(orders, signal, dry_run: bool = True) -> None:
+    """Display proposed trades before execution."""
+    mode = "[yellow]DRY RUN[/yellow]" if dry_run else "[red bold]LIVE[/red bold]"
+    color = signal.overall_color.value
+    style = SIGNAL_STYLE.get(color, "")
+
+    console.print(f"\n  Mode: {mode}   Signal: [{style}]{color.upper()}[/{style}]")
+    if signal.veto_active:
+        console.print("  [red bold]AI HEALTH VETO ACTIVE[/red bold]")
+    console.print()
+
+    table = Table(title="Execution Plan", show_lines=True)
+    table.add_column("#", width=4, justify="right")
+    table.add_column("Side", width=6, justify="center")
+    table.add_column("Ticker", width=8)
+    table.add_column(f"Amount ({EUR})", width=14, justify="right")
+    table.add_column("Reason", width=40)
+
+    for i, o in enumerate(orders, 1):
+        side_style = "green" if o.side.value == "BUY" else "red"
+        table.add_row(
+            str(i),
+            f"[{side_style}]{o.side.value}[/{side_style}]",
+            o.ticker,
+            f"{o.amount_eur:,.2f}",
+            o.reason,
+        )
+
+    console.print(table)
+
+    total_buy = sum(o.amount_eur for o in orders if o.side.value == "BUY")
+    total_sell = sum(o.amount_eur for o in orders if o.side.value == "SELL")
+    console.print(f"\n  [green]Total BUY:[/green]  {total_buy:,.2f} {EUR}")
+    console.print(f"  [red]Total SELL:[/red] {total_sell:,.2f} {EUR}")
+    console.print(f"  Net flow: {total_buy - total_sell:+,.2f} {EUR}")
+
+
+def print_execution_results(results) -> None:
+    """Display execution results from broker."""
+    table = Table(title="Execution Results", show_lines=True)
+    table.add_column("Ticker", width=8)
+    table.add_column("Side", width=6, justify="center")
+    table.add_column("Status", width=16, justify="center")
+    table.add_column(f"Filled ({EUR})", width=14, justify="right")
+    table.add_column("Shares", width=10, justify="right")
+    table.add_column("Avg Price", width=12, justify="right")
+    table.add_column("Error", width=24)
+
+    for r in results:
+        status_style = {
+            "filled": "green",
+            "partially_filled": "yellow",
+            "cancelled": "dim",
+            "rejected": "red",
+            "error": "red bold",
+        }.get(r.status.value, "")
+        status_text = f"[{status_style}]{r.status.value.upper()}[/{status_style}]" if status_style else r.status.value.upper()
+
+        side_style = "green" if r.side.value == "BUY" else "red"
+        table.add_row(
+            r.ticker,
+            f"[{side_style}]{r.side.value}[/{side_style}]",
+            status_text,
+            f"{r.filled_eur:,.2f}",
+            f"{r.filled_shares:.4f}" if r.filled_shares else "-",
+            f"{r.avg_price:,.2f}" if r.avg_price else "-",
+            r.error or "",
+        )
+
+    console.print()
+    console.print(table)
+
+    filled_count = sum(1 for r in results if r.status.value == "filled")
+    console.print(f"\n  {filled_count}/{len(results)} orders filled.")
+    console.print()
+
+
+def print_pipeline_summary(stages: list[dict]) -> None:
+    """Display pipeline DAG execution summary."""
+    table = Table(title="Pipeline Summary", show_lines=True)
+    table.add_column("Stage", width=24)
+    table.add_column("Status", width=12, justify="center")
+    table.add_column("Duration", width=12, justify="right")
+    table.add_column("Detail", width=36)
+
+    for s in stages:
+        status = s.get("status", "unknown")
+        clr = {"ok": "green", "error": "red", "skipped": "dim"}.get(status, "")
+        status_text = f"[{clr}]{status.upper()}[/{clr}]" if clr else status.upper()
+        duration = s.get("duration", 0)
+        table.add_row(
+            s.get("name", "?"),
+            status_text,
+            f"{duration:.1f}s",
+            s.get("detail", ""),
         )
 
     console.print()

@@ -115,7 +115,13 @@ def is_configured() -> bool:
     return bool(key and key != "your_gemini_api_key_here")
 
 
-def generate(prompt: str, system_instruction: str = "", search_grounding: bool = False) -> str:
+def generate(
+    prompt: str,
+    system_instruction: str = "",
+    search_grounding: bool = False,
+    json_output: bool = False,
+    max_retries: int = 2,
+) -> str:
     """Generate a response from Gemini.
 
     Uses the strongest available Gemini Pro model (auto-discovered), with
@@ -123,9 +129,12 @@ def generate(prompt: str, system_instruction: str = "", search_grounding: bool =
 
     You can pin a model via GEMINI_MODEL in .env.
 
-    When search_grounding=True, enables Google Search as a tool so
-    Gemini can access real-time web information instead of relying on
-    stale training data.
+    Parameters:
+        prompt: The user prompt.
+        system_instruction: Injected as system-level instruction.
+        search_grounding: Enable Google Search for real-time web data.
+        json_output: Force temperature=0 and JSON output mode.
+        max_retries: Auto-retry with stricter penalty prompt on parse failure.
     """
     from google import genai
 
@@ -137,32 +146,58 @@ def generate(prompt: str, system_instruction: str = "", search_grounding: bool =
         client = genai.Client(api_key=api_key)
         models = _candidate_models(client)
 
-        config_kwargs = {}
-        if system_instruction:
-            config_kwargs["system_instruction"] = system_instruction
-        if search_grounding:
-            config_kwargs["tools"] = [
-                genai.types.Tool(google_search=genai.types.GoogleSearch()),
-            ]
+        for attempt in range(1, max_retries + 2):  # +2 because range is exclusive
+            config_kwargs: dict = {}
 
-        config = genai.types.GenerateContentConfig(**config_kwargs) if config_kwargs else None
-
-        errors: list[str] = []
-        for model_name in models:
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                    config=config,
+            # Build system instruction with penalty prompt on retries
+            effective_instruction = system_instruction
+            if attempt > 1:
+                penalty = (
+                    "CRITICAL: Your previous response was malformed JSON. "
+                    "Respond with ONLY a valid JSON object. No markdown, no code "
+                    "fences, no explanation text. Just the raw JSON."
                 )
-                if response.text:
-                    return response.text
-                return "[No response from Gemini]"
-            except Exception as model_error:
-                errors.append(f"{model_name}: {model_error}")
+                effective_instruction = f"{penalty}\n\n{system_instruction}" if system_instruction else penalty
 
-        summary = "; ".join(errors[:3]) if errors else "unknown"
-        return f"[Gemini API error: all candidate models failed ({summary})]"
+            if effective_instruction:
+                config_kwargs["system_instruction"] = effective_instruction
+
+            # Temperature=0 for deterministic outputs (blueprint requirement)
+            config_kwargs["temperature"] = 0.0
+
+            if json_output:
+                config_kwargs["response_mime_type"] = "application/json"
+
+            if search_grounding:
+                config_kwargs["tools"] = [
+                    genai.types.Tool(google_search=genai.types.GoogleSearch()),
+                ]
+
+            config = genai.types.GenerateContentConfig(**config_kwargs)
+
+            errors: list[str] = []
+            for model_name in models:
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=config,
+                    )
+                    if response.text:
+                        return response.text
+                    return "[No response from Gemini]"
+                except Exception as model_error:
+                    errors.append(f"{model_name}: {model_error}")
+
+            # If all models failed on this attempt, continue to next attempt
+            if attempt <= max_retries:
+                continue
+
+            summary = "; ".join(errors[:3]) if errors else "unknown"
+            return f"[Gemini API error: all candidate models failed ({summary})]"
+
+        # Should not reach here, but just in case
+        return "[Gemini API error: max retries exceeded]"
 
     except Exception as e:
         return f"[Gemini API error: {e}]"

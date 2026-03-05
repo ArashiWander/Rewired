@@ -16,6 +16,7 @@ from rewired import get_data_dir
 _SIGNAL_TTL = 300       # 5 minutes
 _PORTFOLIO_TTL = 120    # 2 minutes
 _PIES_TTL = 300         # 5 minutes
+_EVAL_TTL = 600         # 10 minutes (Gemini calls are expensive)
 
 
 @dataclass
@@ -72,6 +73,10 @@ class DashboardState:
 
     _universe_cache: object = field(default=None, repr=False)
     _universe_status: DataStatus = field(default_factory=DataStatus)
+
+    _evaluation_cache: object = field(default=None, repr=False)
+    _evaluation_ts: float = 0
+    _evaluation_status: DataStatus = field(default_factory=DataStatus)
 
     def get_signals(self):
         """Get signals, refreshing if stale."""
@@ -159,6 +164,19 @@ class DashboardState:
             self._universe_status.mark_error(str(e))
         return self._universe_cache
 
+    def get_evaluations(self):
+        """Get cached evaluation batch, refreshing if stale."""
+        if self._evaluation_cache and (time.time() - self._evaluation_ts < _EVAL_TTL):
+            return self._evaluation_cache
+        try:
+            from rewired.agent.evaluator import evaluate_universe
+            self._evaluation_cache = evaluate_universe()
+            self._evaluation_ts = time.time()
+            self._evaluation_status.mark_success()
+        except Exception as e:
+            self._evaluation_status.mark_error(str(e))
+        return self._evaluation_cache
+
     def get_all_statuses(self) -> dict[str, DataStatus]:
         """Return status of all data sources for the UI status bar."""
         return {
@@ -167,6 +185,7 @@ class DashboardState:
             "Pies": self._pies_status,
             "Suggestions": self._suggestions_status,
             "Universe": self._universe_status,
+            "Evaluation": self._evaluation_status,
         }
 
     def refresh_all(self) -> None:

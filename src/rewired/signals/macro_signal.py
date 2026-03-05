@@ -1,4 +1,4 @@
-"""Macro signal calculator."""
+"""Macro signal calculator - delegates to boolean rules engine."""
 
 from __future__ import annotations
 
@@ -9,14 +9,12 @@ from rewired.models.signals import (
     CategorySignal,
     SignalCategory,
     SignalColor,
-    SignalReading,
-    SIGNAL_SCORES,
-    score_to_color,
 )
+from rewired.signals.rules import evaluate_macro_rules
 
 
 def calculate_macro_signal() -> CategorySignal:
-    """Calculate composite macro signal from readings."""
+    """Calculate macro signal using deterministic boolean rules."""
     readings = get_macro_readings()
     now = datetime.now()
 
@@ -24,24 +22,19 @@ def calculate_macro_signal() -> CategorySignal:
         return CategorySignal(
             category=SignalCategory.MACRO,
             readings=[],
-            composite_color=SignalColor.YELLOW,
+            composite_color=SignalColor.ORANGE,
             timestamp=now,
-            explanation="No macro data available",
+            explanation="No macro data available - defaulting to ORANGE (defensive)",
+            rule_triggered="DATA_MISSING",
         )
 
-    # Weighted average of signal scores
-    total_weight = len(readings)
-    weighted_score = sum(SIGNAL_SCORES[r.color] for r in readings) / total_weight
-    composite = score_to_color(weighted_score)
-
-    # Build explanation from worst readings
-    worst = max(readings, key=lambda r: SIGNAL_SCORES[r.color])
-    explanation = worst.detail
+    color, explanation = evaluate_macro_rules(readings)
 
     return CategorySignal(
         category=SignalCategory.MACRO,
         readings=readings,
-        composite_color=composite,
+        composite_color=color,
         timestamp=now,
         explanation=explanation,
+        rule_triggered=explanation.split(":")[0] if ":" in explanation else color.value,
     )

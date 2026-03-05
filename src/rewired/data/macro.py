@@ -1,4 +1,10 @@
-"""Macro economic data from FRED API."""
+"""Macro economic data from FRED API.
+
+Fetches both the metrics required by the boolean rules engine (ISM PMI,
+Core PCE MoM, Retail Sales MoM, Unemployment MoM, Yield Curve) and
+supporting indicators (GDP, capacity utilisation, jobless claims, CPI,
+consumer sentiment) for informational display.
+"""
 
 from __future__ import annotations
 
@@ -42,7 +48,107 @@ def _fred_readings(fred, now: datetime) -> list[SignalReading]:
     """Fetch readings using FRED API."""
     readings = []
 
-    # Yield curve 10Y-2Y
+    # ── ISM Manufacturing PMI (CRITICAL for rules engine) ─────────────
+    try:
+        data = fred.get_series("NAPM", observation_start="2024-06-01")
+        if not data.empty:
+            values = data.dropna()
+            current = float(values.iloc[-1])
+
+            # Count consecutive months below 48 (from most recent backwards)
+            consecutive_below_48 = 0
+            for v in reversed(values.values):
+                if float(v) < 48:
+                    consecutive_below_48 += 1
+                else:
+                    break
+
+            if current > 52:
+                color = SignalColor.GREEN
+            elif current > 50:
+                color = SignalColor.YELLOW
+            elif current > 48:
+                color = SignalColor.ORANGE
+            else:
+                color = SignalColor.RED
+
+            readings.append(SignalReading(
+                name="ISM PMI",
+                value=current,
+                color=color,
+                timestamp=now,
+                source="FRED:NAPM",
+                detail=f"ISM Manufacturing PMI: {current:.1f}",
+                metadata={
+                    "consecutive_below_threshold": consecutive_below_48,
+                    "previous": float(values.iloc[-2]) if len(values) >= 2 else None,
+                },
+            ))
+    except Exception:
+        pass
+
+    # ── Core PCE MoM % (CRITICAL for rules engine) ───────────────────
+    try:
+        data = fred.get_series("PCEPILFE", observation_start="2024-06-01")
+        if not data.empty:
+            values = data.dropna()
+            if len(values) >= 2:
+                current_idx = float(values.iloc[-1])
+                prev_idx = float(values.iloc[-2])
+                mom_pct = ((current_idx / prev_idx) - 1) * 100
+
+                if mom_pct <= 0.1:
+                    color = SignalColor.GREEN
+                elif mom_pct <= 0.2:
+                    color = SignalColor.YELLOW
+                elif mom_pct <= 0.3:
+                    color = SignalColor.ORANGE
+                else:
+                    color = SignalColor.RED
+
+                readings.append(SignalReading(
+                    name="Core PCE MoM",
+                    value=mom_pct,
+                    color=color,
+                    timestamp=now,
+                    source="FRED:PCEPILFE",
+                    detail=f"Core PCE: {mom_pct:.2f}% MoM",
+                    metadata={"current_index": current_idx, "prev_index": prev_idx},
+                ))
+    except Exception:
+        pass
+
+    # ── Retail Sales MoM % (CRITICAL for rules engine) ────────────────
+    try:
+        data = fred.get_series("RSAFS", observation_start="2024-06-01")
+        if not data.empty:
+            values = data.dropna()
+            if len(values) >= 2:
+                current_val = float(values.iloc[-1])
+                prev_val = float(values.iloc[-2])
+                mom_pct = ((current_val / prev_val) - 1) * 100
+
+                if mom_pct > 0.3:
+                    color = SignalColor.GREEN
+                elif mom_pct > 0.0:
+                    color = SignalColor.YELLOW
+                elif mom_pct > -0.3:
+                    color = SignalColor.ORANGE
+                else:
+                    color = SignalColor.RED
+
+                readings.append(SignalReading(
+                    name="Retail Sales MoM",
+                    value=mom_pct,
+                    color=color,
+                    timestamp=now,
+                    source="FRED:RSAFS",
+                    detail=f"Retail Sales: {mom_pct:+.2f}% MoM",
+                ))
+    except Exception:
+        pass
+
+    # ── Yield Curve 10Y-2Y (CRITICAL for rules engine) ───────────────
     try:
         data = fred.get_series("T10Y2Y", observation_start="2024-01-01")
         if not data.empty:
@@ -66,31 +172,67 @@ def _fred_readings(fred, now: datetime) -> list[SignalReading]:
     except Exception:
         pass
 
-    # Unemployment rate
+    # ── Unemployment MoM Change (CRITICAL for rules engine) ───────────
     try:
-        data = fred.get_series("UNRATE", observation_start="2023-01-01")
-        if not data.empty and len(data) >= 7:
-            current = float(data.iloc[-1])
-            six_months_ago = float(data.iloc[-7])
-            change = current - six_months_ago
-            if change <= 0.0:
+        data = fred.get_series("UNRATE", observation_start="2024-01-01")
+        if not data.empty and len(data) >= 2:
+            values = data.dropna()
+            current = float(values.iloc[-1])
+            prev = float(values.iloc[-2])
+            mom_change = current - prev
+
+            if mom_change <= 0.0:
                 color = SignalColor.GREEN
-            elif change <= 0.3:
+            elif mom_change <= 0.1:
                 color = SignalColor.YELLOW
-            elif change <= 0.8:
+            elif mom_change <= 0.2:
                 color = SignalColor.ORANGE
             else:
                 color = SignalColor.RED
+
             readings.append(SignalReading(
-                name="Unemployment",
-                value=current,
+                name="Unemployment MoM Change",
+                value=mom_change,
                 color=color,
                 timestamp=now,
                 source="FRED:UNRATE",
-                detail=f"{current:.1f}% (6mo change: {change:+.1f}%)",
+                detail=f"Unemployment: {current:.1f}% (MoM: {mom_change:+.2f}%)",
+                metadata={"mom_change": mom_change, "current_rate": current},
             ))
     except Exception:
         pass
+
+    # ── Non-Farm Payrolls MoM (supporting) ────────────────────────────
+    try:
+        data = fred.get_series("PAYEMS", observation_start="2024-06-01")
+        if not data.empty:
+            values = data.dropna()
+            if len(values) >= 2:
+                current = float(values.iloc[-1])
+                prev = float(values.iloc[-2])
+                change_k = current - prev  # in thousands
+
+                if change_k > 200:
+                    color = SignalColor.GREEN
+                elif change_k > 100:
+                    color = SignalColor.YELLOW
+                elif change_k > 0:
+                    color = SignalColor.ORANGE
+                else:
+                    color = SignalColor.RED
+
+                readings.append(SignalReading(
+                    name="Non-Farm Payrolls",
+                    value=change_k,
+                    color=color,
+                    timestamp=now,
+                    source="FRED:PAYEMS",
+                    detail=f"NFP: {change_k:+.0f}K jobs MoM",
+                ))
+    except Exception:
+        pass
+
+    # ── Supporting indicators (informational, not used in boolean rules) ─
 
     # GDP growth
     try:
@@ -116,7 +258,7 @@ def _fred_readings(fred, now: datetime) -> list[SignalReading]:
     except Exception:
         pass
 
-    # Capacity Utilization (manufacturing health, leading indicator)
+    # Capacity Utilization
     try:
         data = fred.get_series("TCU", observation_start="2024-01-01")
         if not data.empty:
@@ -135,12 +277,12 @@ def _fred_readings(fred, now: datetime) -> list[SignalReading]:
                 color=color,
                 timestamp=now,
                 source="FRED:TCU",
-                detail=f"Capacity: {value:.1f}% ({'strong' if value > 78 else 'moderate' if value > 75 else 'weak'})",
+                detail=f"Capacity: {value:.1f}%",
             ))
     except Exception:
         pass
 
-    # Initial Jobless Claims (weekly, most timely labor signal)
+    # Initial Jobless Claims
     try:
         data = fred.get_series("ICSA", observation_start="2024-01-01")
         if not data.empty:
@@ -165,7 +307,7 @@ def _fred_readings(fred, now: datetime) -> list[SignalReading]:
     except Exception:
         pass
 
-    # CPI Year-over-Year (inflation drives Fed policy)
+    # CPI Year-over-Year
     try:
         data = fred.get_series("CPIAUCSL", observation_start="2023-01-01")
         if not data.empty and len(data) >= 13:
@@ -191,7 +333,7 @@ def _fred_readings(fred, now: datetime) -> list[SignalReading]:
     except Exception:
         pass
 
-    # Consumer Sentiment (forward-looking spending intent)
+    # Consumer Sentiment
     try:
         data = fred.get_series("UMCSENT", observation_start="2024-01-01")
         if not data.empty:

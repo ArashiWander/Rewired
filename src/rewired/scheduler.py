@@ -107,3 +107,116 @@ def start_monitor() -> None:
             time.sleep(60)
     except KeyboardInterrupt:
         console.print("\n[bold]Monitor stopped.[/bold]")
+
+
+# ── Live price feed ──────────────────────────────────────────────────────
+
+# In-memory price cache: {ticker: (price, timestamp)}
+_price_cache: dict[str, tuple[float, float]] = {}
+_price_callbacks: list = []
+
+_PRICE_POLL_INTERVAL = 60  # seconds
+
+
+def get_cached_price(ticker: str) -> float | None:
+    """Get the last known price for a ticker from the live cache."""
+    entry = _price_cache.get(ticker)
+    if entry:
+        return entry[0]
+    return None
+
+
+def get_all_cached_prices() -> dict[str, float]:
+    """Return all cached prices as {ticker: price}."""
+    return {t: v[0] for t, v in _price_cache.items()}
+
+
+def register_price_callback(callback) -> None:
+    """Register a callback ``fn(ticker, price)`` for live price updates."""
+    _price_callbacks.append(callback)
+
+
+def _notify_callbacks(ticker: str, price: float) -> None:
+    """Fire all registered callbacks."""
+    for cb in _price_callbacks:
+        try:
+            cb(ticker, price)
+        except Exception:
+            pass
+
+
+def poll_prices_yfinance(tickers: list[str]) -> None:
+    """Fetch current prices via yfinance and update the cache.
+
+    Called periodically by the scheduler as a fallback when IBKR is not
+    connected.  Thread-safe for background execution.
+    """
+    import yfinance as yf
+
+    if not tickers:
+        return
+
+    try:
+        data = yf.download(
+            tickers,
+            period="1d",
+            interval="1m",
+            progress=False,
+            threads=True,
+        )
+        if data.empty:
+            return
+
+        now = time.time()
+        # yfinance returns multi-level columns for multiple tickers
+        if len(tickers) == 1:
+            last = data["Close"].iloc[-1]
+            if last and last > 0:
+                _price_cache[tickers[0]] = (float(last), now)
+                _notify_callbacks(tickers[0], float(last))
+        else:
+            close = data["Close"]
+            for ticker in tickers:
+                if ticker in close.columns:
+                    val = close[ticker].iloc[-1]
+                    if val and val > 0:
+                        _price_cache[ticker] = (float(val), now)
+                        _notify_callbacks(ticker, float(val))
+    except Exception as e:
+        console.print(f"[dim]Price poll error: {e}[/dim]")
+
+
+def start_price_feed(tickers: list[str], use_ibkr: bool = False) -> None:
+    """Start a background price feed.
+
+    If *use_ibkr* is True and IBKR is connected, uses streaming market data.
+    Otherwise falls back to yfinance polling every 60 seconds.
+    """
+    import threading
+
+    if use_ibkr:
+        try:
+            from rewired.broker.ibkr import IBKRBroker
+
+            brk = IBKRBroker()
+            brk.connect()
+
+            def _on_tick(ticker: str, price: float):
+                _price_cache[ticker] = (price, time.time())
+                _notify_callbacks(ticker, price)
+
+            brk.subscribe_market_data(tickers, _on_tick)
+            console.print(f"[green]IBKR streaming active for {len(tickers)} tickers[/green]")
+            return
+        except Exception as e:
+            console.print(f"[yellow]IBKR streaming failed ({e}), falling back to yfinance polling[/yellow]")
+
+    # yfinance polling fallback
+    def _poll_loop():
+        while True:
+            poll_prices_yfinance(tickers)
+            time.sleep(_PRICE_POLL_INTERVAL)
+
+    thread = threading.Thread(target=_poll_loop, daemon=True, name="price-feed")
+    thread.start()
+    console.print(f"[green]Price feed active (yfinance, every {_PRICE_POLL_INTERVAL}s, {len(tickers)} tickers)[/green]")
