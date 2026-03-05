@@ -1,0 +1,106 @@
+# Rewired Index Stock Universe
+# Each stock has a Layer (L1-L5) and Tier (T1-T4) coordinate
+
+stocks:
+  # ── L1: Physical Infrastructure ──────────────────────────
+  - ticker: NVDA
+    name: NVIDIA
+    layer: L1
+    tier: T1
+    max_weight_pct: 15.0
+    notes: "GPU monopoly, AI compute backbone"
+
+  - ticker: TSM
+    name: Taiwan Semiconductor
+    layer: L1
+    tier: T1
+    max_weight_pct: 10.0
+    notes: "Fabricates the world's most advanced chips"
+
+  - ticker: ASML
+    name: ASML Holding
+    layer: L1
+    tier: T1
+    max_weight_pct: 10.0
+    notes: "EUV lithography monopoly"
+
+  - ticker: AMD
+    name: AMD
+    layer: L1
+    tier: T2
+    max_weight_pct: 8.0
+    notes: "GPU competition, data center growth"
+
+  # ── L2: Digital Infrastructure ───────────────────────────
+  - ticker: AMZN
+    name: Amazon (AWS)
+    layer: L2
+    tier: T1
+    max_weight_pct: 10.0
+    notes: "AWS is the largest NeoCloud"
+
+  - ticker: MSFT
+    name: Microsoft (Azure)
+    layer: L2
+    tier: T1
+    max_weight_pct: 10.0
+    notes: "Azure + OpenAI integration"
+
+  # ── L3: Core Intelligence ────────────────────────────────
+  - ticker: GOOGL
+    name: Alphabet
+    layer: L3
+    tier: T1
+    max_weight_pct: 12.0
+    notes: "Gemini, DeepMind, full-stack AI from chips to apps"
+
+  - ticker: META
+    name: Meta Platforms
+    layer: L3
+    tier: T1
+    max_weight_pct: 10.0
+    notes: "LLaMA open source, massive compute investment"
+
+  - ticker: AAPL
+    name: Apple
+    layer: L3
+    tier: T1
+    max_weight_pct: 10.0
+    notes: "On-device AI, ecosystem lock-in, Apple Intelligence"
+
+  - ticker: TSLA
+    name: Tesla
+    layer: L3
+    tier: T2
+    max_weight_pct: 8.0
+    notes: "FSD, Optimus robot, energy, full-stack AI"
+
+  # ── L4: Dynamic Residual (Applications) ──────────────────
+  - ticker: PLTR
+    name: Palantir
+    layer: L4
+    tier: T3
+    max_weight_pct: 5.0
+    notes: "AI-native enterprise software"
+
+  - ticker: COIN
+    name: Coinbase
+    layer: L4
+    tier: T3
+    max_weight_pct: 5.0
+    notes: "Neo Financial / DeFi gateway"
+
+  # ── L5: Frontier Exploration ─────────────────────────────
+  - ticker: IONQ
+    name: IonQ
+    layer: L5
+    tier: T4
+    max_weight_pct: 3.0
+    notes: "Quantum computing pure play"
+
+  - ticker: RKLB
+    name: Rocket Lab
+    layer: L5
+    tier: T4
+    max_weight_pct: 3.0
+    notes: "Space economy launch provider"

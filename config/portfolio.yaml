@@ -1,0 +1,42 @@
+# Portfolio configuration for Rewired Index
+
+total_capital_eur: 3100.0
+
+# Base allocation by tier (must sum to 1.0)
+allocation_by_tier:
+  T1: 0.40    # 1240 EUR - Core holdings
+  T2: 0.30    #  930 EUR - Growth engine
+  T3: 0.20    #  620 EUR - Thematic allocation
+  T4: 0.10    #  310 EUR - Speculation
+
+# Signal color multipliers applied to base allocation
+signal_multipliers:
+  green: 1.0
+  yellow: 0.7
+  orange: 0.4
+  red: 0.1
+
+# What to do with each tier when signal turns bad
+tier_rules_by_signal:
+  red:
+    T1: hold
+    T2: trim_50
+    T3: exit
+    T4: exit
+  orange:
+    T1: hold
+    T2: hold
+    T3: trim_50
+    T4: exit
+  yellow:
+    T1: hold
+    T2: hold
+    T3: hold
+    T4: trim_50
+
+# Position constraints
+constraints:
+  max_single_position_pct: 15.0
+  min_position_eur: 10.0
+  max_positions: 15
+  rebalance_threshold_pct: 5.0

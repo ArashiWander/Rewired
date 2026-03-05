@@ -1,0 +1,103 @@
+# Signal thresholds and weights for Rewired Index
+
+macro:
+  category_weight: 0.30
+  metrics:
+    vix:
+      source: yfinance
+      ticker: "^VIX"
+      thresholds:
+        green_max: 16.0
+        yellow_max: 22.0
+        orange_max: 30.0
+      weight: 0.30
+
+    yield_curve_10y2y:
+      source: fred
+      series_id: T10Y2Y
+      thresholds:
+        green_min: 0.5
+        yellow_min: 0.0
+        orange_min: -0.5
+      weight: 0.25
+
+    unemployment:
+      source: fred
+      series_id: UNRATE
+      # Color based on 6-month change
+      thresholds:
+        green_max_change: 0.0
+        yellow_max_change: 0.3
+        orange_max_change: 0.8
+      weight: 0.20
+
+    gdp_growth:
+      source: fred
+      series_id: A191RL1Q225SBEA
+      thresholds:
+        green_min: 2.0
+        yellow_min: 1.0
+        orange_min: 0.0
+      weight: 0.25
+
+sentiment:
+  category_weight: 0.30
+  metrics:
+    vix_level:
+      source: yfinance
+      ticker: "^VIX"
+      thresholds:
+        green_max: 16.0
+        yellow_max: 22.0
+        orange_max: 30.0
+      weight: 0.40
+
+    sp500_vs_200ma:
+      source: yfinance
+      ticker: "^GSPC"
+      # Percent above/below 200-day moving average
+      thresholds:
+        green_min: 2.0
+        yellow_min: -2.0
+        orange_min: -8.0
+      weight: 0.35
+
+    vix_term_structure:
+      source: yfinance
+      tickers:
+        - "^VIX"
+        - "^VIX9D"
+      # Contango (VIX > VIX9D) = calm, backwardation = fear
+      weight: 0.25
+
+ai_health:
+  category_weight: 0.40
+  metrics:
+    semiconductor_momentum:
+      source: yfinance
+      ticker: SMH
+      # 50-day MA vs 200-day MA crossover
+      weight: 0.30
+
+    cloud_etf_momentum:
+      source: yfinance
+      ticker: WCLD
+      # 50-day MA vs 200-day MA
+      weight: 0.20
+
+    hyperscaler_revenue_growth:
+      source: yfinance
+      tickers:
+        - MSFT
+        - GOOGL
+        - AMZN
+        - NVDA
+      # QoQ revenue growth trend
+      weight: 0.30
+
+    nvidia_relative_strength:
+      source: yfinance
+      ticker: NVDA
+      benchmark: "^GSPC"
+      # NVDA 3-month return vs S&P 500 3-month return
+      weight: 0.20
