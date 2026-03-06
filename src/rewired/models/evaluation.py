@@ -35,6 +35,7 @@ class CompanyEvaluation(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.now)
     model_used: str = ""  # which Gemini model produced this
     data_quality: str = "full"  # "full" | "partial" | "minimal"
+    in_universe: bool = True
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 

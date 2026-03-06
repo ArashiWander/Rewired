@@ -19,6 +19,9 @@ _PIES_TTL = 300         # 5 minutes
 _EVAL_TTL = 600         # 10 minutes (Gemini calls are expensive)
 
 
+_HEATMAP_TTL = 60      # 1 minute — fast enough for live heatmap refresh
+
+
 @dataclass
 class DataStatus:
     """Status of a single data source."""
@@ -77,6 +80,10 @@ class DashboardState:
     _evaluation_cache: object = field(default=None, repr=False)
     _evaluation_ts: float = 0
     _evaluation_status: DataStatus = field(default_factory=DataStatus)
+
+    _heatmap_cache: dict = field(default_factory=dict, repr=False)
+    _heatmap_ts: float = 0
+    _heatmap_status: DataStatus = field(default_factory=DataStatus)
 
     def get_signals(self):
         """Get signals, refreshing if stale."""
@@ -177,6 +184,48 @@ class DashboardState:
             self._evaluation_status.mark_error(str(e))
         return self._evaluation_cache
 
+    def get_heatmap_data(self) -> dict:
+        """Get enriched heatmap data: prices, portfolio values, daily changes.
+
+        Returns a dict keyed by ``(layer_int, tier_int)`` → list of dicts
+        with keys: ticker, name, price_eur, portfolio_value_eur, weight_pct,
+        daily_change_pct, max_weight_pct.
+        """
+        if self._heatmap_cache and (time.time() - self._heatmap_ts < _HEATMAP_TTL):
+            return self._heatmap_cache
+        try:
+            uni = self.get_universe()
+            pf = self.get_portfolio()
+            if not uni:
+                return self._heatmap_cache
+
+            all_tickers = uni.tickers
+            from rewired.data.prices import get_current_prices_eur, get_daily_changes
+            prices_eur = get_current_prices_eur(all_tickers) if all_tickers else {}
+            daily_changes = get_daily_changes(all_tickers) if all_tickers else {}
+
+            result: dict[tuple[int, int], list[dict]] = {}
+            for stock in uni.stocks:
+                key = (stock.layer.value, stock.tier.value)
+                pos = pf.positions.get(stock.ticker) if pf and pf.positions else None
+                entry = {
+                    "ticker": stock.ticker,
+                    "name": stock.name,
+                    "price_eur": round(prices_eur.get(stock.ticker, 0.0), 2),
+                    "portfolio_value_eur": round(pos.market_value_eur, 2) if pos else 0.0,
+                    "weight_pct": round(pos.weight_pct, 1) if pos else 0.0,
+                    "daily_change_pct": daily_changes.get(stock.ticker, 0.0),
+                    "max_weight_pct": stock.max_weight_pct,
+                }
+                result.setdefault(key, []).append(entry)
+
+            self._heatmap_cache = result
+            self._heatmap_ts = time.time()
+            self._heatmap_status.mark_success()
+        except Exception as e:
+            self._heatmap_status.mark_error(str(e))
+        return self._heatmap_cache
+
     def get_all_statuses(self) -> dict[str, DataStatus]:
         """Return status of all data sources for the UI status bar."""
         return {
@@ -186,6 +235,7 @@ class DashboardState:
             "Suggestions": self._suggestions_status,
             "Universe": self._universe_status,
             "Evaluation": self._evaluation_status,
+            "Heatmap": self._heatmap_status,
         }
 
     def refresh_all(self) -> None:
@@ -194,8 +244,15 @@ class DashboardState:
         self._portfolio_ts = 0
         self._pies_ts = 0
         self._suggestions_ts = 0
+        self._heatmap_ts = 0
         self._universe_cache = None
 
 
 # Singleton instance
 dashboard_state = DashboardState()
+
+
+def invalidate_universe() -> None:
+    """Invalidate the universe cache after external mutation (e.g. rebalancer)."""
+    dashboard_state._universe_cache = None
+    dashboard_state._universe_status = DataStatus()

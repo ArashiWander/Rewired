@@ -966,4 +966,332 @@ _STRINGS: dict[str, dict[Lang, str]] = {
         Lang.EN: "Sending orders to IBKR\u2026",
         Lang.ZH: "\u6b63\u5728\u53d1\u9001\u8ba2\u5355\u5230 IBKR\u2026",
     },
+
+    # \u2500\u2500 Execution modal (hardcoded string migration) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    "exec.veto_active": {
+        Lang.EN: "AI HEALTH VETO ACTIVE",
+        Lang.ZH: "AI \u5065\u5eb7\u5426\u51b3\u5df2\u89e6\u53d1",
+    },
+    "exec.col_side": {
+        Lang.EN: "Side",
+        Lang.ZH: "\u65b9\u5411",
+    },
+    "exec.col_ticker": {
+        Lang.EN: "Ticker",
+        Lang.ZH: "\u4ee3\u7801",
+    },
+    "exec.col_amount": {
+        Lang.EN: "Amount EUR",
+        Lang.ZH: "\u91d1\u989d (EUR)",
+    },
+    "exec.col_reason": {
+        Lang.EN: "Reason",
+        Lang.ZH: "\u539f\u56e0",
+    },
+    "exec.totals": {
+        Lang.EN: "Total BUY: {buy} EUR   Total SELL: {sell} EUR",
+        Lang.ZH: "\u4e70\u5165\u603b\u8ba1: {buy} EUR   \u5356\u51fa\u603b\u8ba1: {sell} EUR",
+    },
+    "exec.filled_count": {
+        Lang.EN: "{filled}/{total} orders filled",
+        Lang.ZH: "{filled}/{total} \u7b14\u8ba2\u5355\u5df2\u6210\u4ea4",
+    },
+    "exec.order_result": {
+        Lang.EN: "{side} {ticker}: {status} ({shares} shares @ {price})",
+        Lang.ZH: "{side} {ticker}: {status} ({shares} \u80a1 @ {price})",
+    },
+    "exec.err_no_ibkr": {
+        Lang.EN: "ib_insync not installed. Install with: pip install -e \".[broker]\"",
+        Lang.ZH: "ib_insync \u672a\u5b89\u88c5\u3002\u8bf7\u8fd0\u884c: pip install -e \".[broker]\"",
+    },
+    "exec.err_broker": {
+        Lang.EN: "Broker error: {err}",
+        Lang.ZH: "\u7ecf\u7eaa\u5546\u9519\u8bef: {err}",
+    },
+
+    # \u2500\u2500 Evaluation scores (hardcoded string migration) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    "eval.score_fundamental": {
+        Lang.EN: "Fundamental",
+        Lang.ZH: "\u57fa\u672c\u9762",
+    },
+    "eval.score_ai_rel": {
+        Lang.EN: "AI-Relevance",
+        Lang.ZH: "AI \u76f8\u5173\u6027",
+    },
+    "eval.score_moat": {
+        Lang.EN: "Moat",
+        Lang.ZH: "\u62a4\u57ce\u6cb3",
+    },
+    "eval.score_mgmt": {
+        Lang.EN: "Management",
+        Lang.ZH: "\u7ba1\u7406\u5c42",
+    },
+    "eval.conviction_label": {
+        Lang.EN: "Conviction",
+        Lang.ZH: "\u4fe1\u5ff5",
+    },
+    "eval.earnings_label": {
+        Lang.EN: "Earnings",
+        Lang.ZH: "\u76c8\u5229",
+    },
+    "eval.data_quality_label": {
+        Lang.EN: "Data",
+        Lang.ZH: "\u6570\u636e",
+    },
+    "eval.tier_mismatch": {
+        Lang.EN: "Tier mismatch: suggest {tier}",
+        Lang.ZH: "\u5c42\u7ea7\u4e0d\u5339\u914d: \u5efa\u8bae {tier}",
+    },
+    "eval.catalyst_label": {
+        Lang.EN: "Catalyst",
+        Lang.ZH: "\u50ac\u5316\u5242",
+    },
+    "eval.risk_label": {
+        Lang.EN: "Risk",
+        Lang.ZH: "\u98ce\u9669",
+    },
+    "eval.not_in_universe": {
+        Lang.EN: "Not in Universe",
+        Lang.ZH: "\u672a\u5728\u5b87\u5b99\u4e2d",
+    },
+    "eval.col_ticker": {
+        Lang.EN: "Ticker",
+        Lang.ZH: "\u4ee3\u7801",
+    },
+    "eval.col_score": {
+        Lang.EN: "Score",
+        Lang.ZH: "\u8bc4\u5206",
+    },
+    "eval.col_fund": {
+        Lang.EN: "Fund.",
+        Lang.ZH: "\u57fa\u672c",
+    },
+    "eval.col_ai_rel": {
+        Lang.EN: "AI-Rel.",
+        Lang.ZH: "AI\u5173",
+    },
+    "eval.col_moat": {
+        Lang.EN: "Moat",
+        Lang.ZH: "\u62a4\u57ce\u6cb3",
+    },
+    "eval.col_mgmt": {
+        Lang.EN: "Mgmt",
+        Lang.ZH: "\u7ba1\u7406",
+    },
+    "eval.col_conviction": {
+        Lang.EN: "Conv.",
+        Lang.ZH: "\u4fe1\u5ff5",
+    },
+    "eval.col_trend": {
+        Lang.EN: "Trend",
+        Lang.ZH: "\u8d8b\u52bf",
+    },
+    "eval.col_tier_ok": {
+        Lang.EN: "Tier OK",
+        Lang.ZH: "\u5c42\u7ea7",
+    },
+    "eval.yes": {
+        Lang.EN: "Yes",
+        Lang.ZH: "\u662f",
+    },
+    "eval.no": {
+        Lang.EN: "No",
+        Lang.ZH: "\u5426",
+    },
+    "eval.errors": {
+        Lang.EN: "Errors: {tickers}",
+        Lang.ZH: "\u9519\u8bef: {tickers}",
+    },
+    "eval.success_rate": {
+        Lang.EN: "Success rate: {rate} ({ok}/{total})",
+        Lang.ZH: "\u6210\u529f\u7387: {rate} ({ok}/{total})",
+    },
+
+    # \u2500\u2500 Universe onboarding \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+    "onboard.title": {
+        Lang.EN: "Add Stock to Universe",
+        Lang.ZH: "\u6dfb\u52a0\u80a1\u7968\u5230\u5b87\u5b99",
+    },
+    "onboard.intro": {
+        Lang.EN: "Enter a ticker symbol. FMP will hydrate the profile and Gemini will auto-classify the Layer and Tier.",
+        Lang.ZH: "\u8f93\u5165\u80a1\u7968\u4ee3\u7801\u3002FMP \u5c06\u83b7\u53d6\u516c\u53f8\u8d44\u6599\uff0cGemini \u5c06\u81ea\u52a8\u5206\u7c7b\u5c42\u7ea7\u548c\u7b49\u7ea7\u3002",
+    },
+    "onboard.ticker_label": {
+        Lang.EN: "Ticker",
+        Lang.ZH: "\u80a1\u7968\u4ee3\u7801",
+    },
+    "onboard.btn_add": {
+        Lang.EN: "Add to Universe",
+        Lang.ZH: "\u6dfb\u52a0\u5230\u5b87\u5b99",
+    },
+    "onboard.adding": {
+        Lang.EN: "Classifying {ticker}\u2026",
+        Lang.ZH: "\u6b63\u5728\u5206\u7c7b {ticker}\u2026",
+    },
+    "onboard.added": {
+        Lang.EN: "{ticker} ({name}) added as L{layer}/T{tier}",
+        Lang.ZH: "{ticker} ({name}) \u5df2\u6dfb\u52a0\u4e3a L{layer}/T{tier}",
+    },
+    "onboard.err_invalid": {
+        Lang.EN: "Invalid ticker: no FMP profile found.",
+        Lang.ZH: "\u65e0\u6548\u4ee3\u7801: FMP \u672a\u627e\u5230\u516c\u53f8\u8d44\u6599\u3002",
+    },
+    "onboard.err_exists": {
+        Lang.EN: "Ticker already in universe.",
+        Lang.ZH: "\u80a1\u7968\u5df2\u5728\u5b87\u5b99\u4e2d\u3002",
+    },
+    "onboard.err_classify": {
+        Lang.EN: "Classification error: {err}",
+        Lang.ZH: "\u5206\u7c7b\u9519\u8bef: {err}",
+    },
+
+    # ── Transparency / Raw data ──────────────────────────────────────
+    "transparency.raw_data": {
+        Lang.EN: "Raw Input Data",
+        Lang.ZH: "\u539f\u59cb\u8f93\u5165\u6570\u636e",
+    },
+    "transparency.signal_inputs": {
+        Lang.EN: "Signal Raw Inputs",
+        Lang.ZH: "\u4fe1\u53f7\u539f\u59cb\u8f93\u5165",
+    },
+    "transparency.fmp_data": {
+        Lang.EN: "FMP Financial Data",
+        Lang.ZH: "FMP \u8d22\u52a1\u6570\u636e",
+    },
+    "transparency.prompt": {
+        Lang.EN: "Prompt Sent to AI",
+        Lang.ZH: "\u53d1\u9001\u7ed9 AI \u7684\u63d0\u793a\u8bcd",
+    },
+    "transparency.gemini_response": {
+        Lang.EN: "Raw AI Response",
+        Lang.ZH: "AI \u539f\u59cb\u54cd\u5e94",
+    },
+    "transparency.earnings_data": {
+        Lang.EN: "Earnings Data",
+        Lang.ZH: "\u8d22\u62a5\u6570\u636e",
+    },
+    "transparency.metrics_data": {
+        Lang.EN: "Key Metrics & Ratios",
+        Lang.ZH: "\u5173\u952e\u6307\u6807\u4e0e\u6bd4\u7387",
+    },
+    "transparency.no_metadata": {
+        Lang.EN: "No raw data available",
+        Lang.ZH: "\u65e0\u539f\u59cb\u6570\u636e",
+    },
+
+    # ── Heatmap interactions (D2) ────────────────────────────────────
+    "heatmap.click_hint": {
+        Lang.EN: "Click a cell to view and manage stocks at that coordinate.",
+        Lang.ZH: "\u70b9\u51fb\u5355\u5143\u683c\u67e5\u770b\u5e76\u7ba1\u7406\u8be5\u5750\u6807\u7684\u80a1\u7968\u3002",
+    },
+    "heatmap.empty_cell": {
+        Lang.EN: "No stocks at this coordinate.",
+        Lang.ZH: "\u6b64\u5750\u6807\u65e0\u80a1\u7968\u3002",
+    },
+    "heatmap.change_tier": {
+        Lang.EN: "Tier",
+        Lang.ZH: "\u7b49\u7ea7",
+    },
+    "heatmap.tier_changed": {
+        Lang.EN: "{ticker}: T{old_tier} -> T{new_tier}",
+        Lang.ZH: "{ticker}: T{old_tier} -> T{new_tier}",
+    },
+    "universe.load_error": {
+        Lang.EN: "Failed to load universe.",
+        Lang.ZH: "\u52a0\u8f7d\u5b87\u5b99\u5931\u8d25\u3002",
+    },
+    "heatmap.not_held": {
+        Lang.EN: "Not held",
+        Lang.ZH: "\u672a\u6301\u6709",
+    },
+
+    # ── Autocomplete (D2) ────────────────────────────────────────────
+    "autocomplete.placeholder": {
+        Lang.EN: "Search ticker or name\u2026",
+        Lang.ZH: "\u641c\u7d22\u80a1\u7968\u4ee3\u7801\u6216\u540d\u79f0\u2026",
+    },
+    "autocomplete.new_badge": {
+        Lang.EN: "[New \u2014 Auto-Onboard]",
+        Lang.ZH: "[\u65b0 \u2014 \u81ea\u52a8\u7eb3\u5165]",
+    },
+    "autocomplete.no_results": {
+        Lang.EN: "No matches",
+        Lang.ZH: "\u65e0\u5339\u914d\u7ed3\u679c",
+    },
+    "autocomplete.searching": {
+        Lang.EN: "Searching\u2026",
+        Lang.ZH: "\u641c\u7d22\u4e2d\u2026",
+    },
+
+    # ── Composite transparency (D3) ─────────────────────────────────
+    "transparency.composite_calc": {
+        Lang.EN: "Composite Calculation Logic",
+        Lang.ZH: "\u7efc\u5408\u4fe1\u53f7\u8ba1\u7b97\u903b\u8f91",
+    },
+    "transparency.sizing_logic": {
+        Lang.EN: "Sizing Logic",
+        Lang.ZH: "\u4ed3\u4f4d\u8ba1\u7b97\u903b\u8f91",
+    },
+
+    # ── Pies execution matrix (D4) ──────────────────────────────────
+    "pies.exec_title": {
+        Lang.EN: "Trading 212 Pies \u2014 Execution Sheet",
+        Lang.ZH: "Trading 212 Pies \u2014 \u6267\u884c\u6e05\u5355",
+    },
+    "pies.action": {
+        Lang.EN: "Action",
+        Lang.ZH: "\u64cd\u4f5c",
+    },
+    "pies.current_pct": {
+        Lang.EN: "Current %",
+        Lang.ZH: "\u5f53\u524d %",
+    },
+    "pies.delta_eur": {
+        Lang.EN: "\u0394 EUR",
+        Lang.ZH: "\u0394 EUR",
+    },
+    "pies.buy_total": {
+        Lang.EN: "Total to BUY",
+        Lang.ZH: "\u603b\u8d2d\u4e70",
+    },
+    "pies.sell_total": {
+        Lang.EN: "Total to SELL",
+        Lang.ZH: "\u603b\u5356\u51fa",
+    },
+    "pies.net_rebalance": {
+        Lang.EN: "Net rebalance",
+        Lang.ZH: "\u51c0\u518d\u5e73\u8861",
+    },
+
+    # ── Heatmap classification & re-evaluate (D3/D4) ────────────────
+    "heatmap.reevaluate": {
+        Lang.EN: "Force Re-evaluate (Gemini)",
+        Lang.ZH: "\u5f3a\u5236\u91cd\u65b0\u8bc4\u4f30 (Gemini)",
+    },
+    "heatmap.reevaluating": {
+        Lang.EN: "Re-evaluating {ticker}\u2026",
+        Lang.ZH: "\u6b63\u5728\u91cd\u65b0\u8bc4\u4f30 {ticker}\u2026",
+    },
+    "heatmap.reevaluated": {
+        Lang.EN: "{ticker} re-evaluated \u2192 L{layer}/T{tier}",
+        Lang.ZH: "{ticker} \u5df2\u91cd\u65b0\u8bc4\u4f30 \u2192 L{layer}/T{tier}",
+    },
+    "heatmap.no_classification": {
+        Lang.EN: "No classification data",
+        Lang.ZH: "\u65e0\u5206\u7c7b\u6570\u636e",
+    },
+
+    # ── Raw data dump (D4) ──────────────────────────────────────────
+    "analysis.raw_data_title": {
+        Lang.EN: "View Raw Source Data & Logic",
+        Lang.ZH: "\u67e5\u770b\u539f\u59cb\u6570\u636e\u4e0e\u903b\u8f91",
+    },
+    "analysis.raw_data_fetching": {
+        Lang.EN: "Fetching raw FRED / VIX / FMP data\u2026",
+        Lang.ZH: "\u6b63\u5728\u83b7\u53d6 FRED / VIX / FMP \u539f\u59cb\u6570\u636e\u2026",
+    },
+    "analysis.raw_data_fetch_btn": {
+        Lang.EN: "Fetch Raw Data",
+        Lang.ZH: "\u83b7\u53d6\u539f\u59cb\u6570\u636e",
+    },
 }

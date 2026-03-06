@@ -23,14 +23,16 @@ def signals():
     print_signals(result)
 
 
-@main.command()
-def universe():
+@main.group(invoke_without_command=True)
+@click.pass_context
+def universe(ctx):
     """Display the LxT stock universe matrix."""
-    from rewired.notifications.console import print_universe
-    from rewired.models.universe import load_universe
+    if ctx.invoked_subcommand is None:
+        from rewired.notifications.console import print_universe
+        from rewired.models.universe import load_universe
 
-    uni = load_universe()
-    print_universe(uni)
+        uni = load_universe()
+        print_universe(uni)
 
 
 @main.group(invoke_without_command=True)
@@ -201,6 +203,63 @@ def resolve_cmd(query):
     console.print()
 
 
+@main.command("rebalance")
+@click.option("--dry-run", is_flag=True, help="Show proposed changes without applying them")
+def rebalance_cmd(dry_run):
+    """Run the autonomous universe rebalancer (evaluate + reclassify tiers)."""
+    from rewired.agent.rebalancer import rebalance_universe
+
+    mode = "[dim](dry run)[/dim]" if dry_run else ""
+    console.print(f"[dim]Running universe rebalance... {mode}[/dim]")
+    changes = rebalance_universe(dry_run=dry_run)
+
+    if not changes:
+        console.print("[green]Universe is aligned — no tier changes needed.[/green]")
+        return
+
+    for c in changes:
+        action = c.get("action", "?")
+        ticker = c.get("ticker", "?")
+        current = c.get("current_tier", "?")
+        proposed = c.get("proposed_tier", "?")
+        reason = c.get("reason", "")[:80]
+        confidence = c.get("confidence", 0)
+
+        if action == "applied":
+            console.print(f"  [green]APPLIED[/green] {ticker}: {current} -> {proposed} (conf={confidence:.1%}) {reason}")
+        elif action == "needs_human_approval":
+            console.print(f"  [yellow]NEEDS APPROVAL[/yellow] {ticker}: {current} -> {proposed} {reason}")
+        elif action == "cooldown_blocked":
+            console.print(f"  [dim]COOLDOWN[/dim] {ticker}: skipped (too recent)")
+        elif action == "verification_rejected":
+            console.print(f"  [red]REJECTED[/red] {ticker}: {current} -> {proposed} {reason}")
+        else:
+            console.print(f"  [dim]{action.upper()}[/dim] {ticker}: {reason}")
+
+
+@universe.command("add")
+@click.argument("ticker")
+def universe_add(ticker):
+    """Add a stock to the universe (auto-classified via FMP + Gemini)."""
+    from rewired.models.universe import onboard_ticker
+
+    ticker = ticker.strip().upper()
+    console.print(f"[dim]Fetching FMP profile for {ticker}...[/dim]")
+    try:
+        stock = onboard_ticker(ticker)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise SystemExit(1)
+
+    console.print(
+        f"[green]Added:[/green] {stock.ticker} ({stock.name}) "
+        f"\u2192 L{stock.layer.value}/T{stock.tier.value}  "
+        f"max_weight={stock.max_weight_pct:.1f}%"
+    )
+    if stock.notes:
+        console.print(f"  [dim]{stock.notes}[/dim]")
+
+
 @main.command("execute")
 @click.option("--dry-run", is_flag=True, default=True, help="Print trades without executing (default: on)")
 @click.option("--live", is_flag=True, help="ACTUALLY execute trades via IBKR (overrides --dry-run)")
@@ -302,3 +361,41 @@ def pipeline_cmd(dry_run, live, evaluate, notify):
         include_evaluation=evaluate,
         send_notifications=notify,
     )
+
+
+@main.command()
+def doctor():
+    """Diagnose Gemini API: list available models and test the fallback chain."""
+    from rewired.agent.gemini import (
+        _candidate_models,
+        generate,
+        is_configured,
+        list_available_models,
+    )
+
+    if not is_configured():
+        console.print("[bold red]GEMINI_API_KEY not set or placeholder.[/bold red]")
+        return
+
+    console.print("[bold]Pinned candidate chain:[/bold]")
+    for m in _candidate_models():
+        console.print(f"  \u2022 {m}")
+
+    console.print("\n[bold]Probing API for available generateContent models...[/bold]")
+    available = list_available_models()
+    if not available:
+        console.print("[red]Could not list models (check API key / network).[/red]")
+    else:
+        pinned = set(_candidate_models())
+        for m in sorted(available, key=lambda x: x["name"]):
+            name = m["name"]
+            tag = " [green]\u2190 pinned[/green]" if name in pinned else ""
+            console.print(f"  {name}{tag}")
+        console.print(f"\n  [dim]{len(available)} models support generateContent[/dim]")
+
+    console.print("\n[bold]Quick generate test...[/bold]")
+    result = generate("Reply with exactly: OK")
+    if result.startswith("["):
+        console.print(f"[red]FAILED:[/red] {result}")
+    else:
+        console.print(f"[green]SUCCESS:[/green] {result[:80]}")

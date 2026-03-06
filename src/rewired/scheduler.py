@@ -81,6 +81,42 @@ def daily_portfolio_summary() -> None:
     dispatch_portfolio_summary(summary)
 
 
+def reeval_universe() -> None:
+    """Run the autonomous universe rebalance cycle.
+
+    Evaluates all stocks, identifies tier mismatches, verifies proposed
+    changes, and applies confirmed reclassifications to universe.yaml.
+    """
+    from rewired.agent.rebalancer import rebalance_universe
+
+    console.print(f"\n[dim]--- Universe rebalance at {datetime.now().strftime('%H:%M')} ---[/dim]")
+
+    try:
+        changes = rebalance_universe()
+        applied = [c for c in changes if c.get("action") == "applied"]
+        if applied:
+            summary = "Universe rebalance:\n"
+            for c in applied:
+                summary += f"  {c['ticker']}: {c.get('current_tier', '?')} -> {c.get('proposed_tier', '?')}\n"
+            console.print(f"[bold green]{len(applied)} tier change(s) applied.[/bold green]")
+            try:
+                dispatch_portfolio_summary(summary)
+            except Exception:
+                pass
+        else:
+            console.print("[dim]No tier changes applied.[/dim]")
+
+        # Log non-applied changes
+        for c in changes:
+            if c.get("action") != "applied":
+                console.print(
+                    f"  [dim]{c.get('ticker', '?')}: {c.get('action', '?')} "
+                    f"({c.get('reason', '')[:60]})[/dim]"
+                )
+    except Exception as exc:
+        console.print(f"[red]Rebalance error: {exc}[/red]")
+
+
 def start_monitor() -> None:
     """Start the scheduled monitoring loop."""
     # Signal check every 4 hours during market hours
@@ -92,6 +128,9 @@ def start_monitor() -> None:
     # Weekly summary on Monday at 08:00
     schedule.every().monday.at("08:00").do(daily_portfolio_summary)
 
+    # Weekly universe rebalance on Sunday at 20:00
+    schedule.every().sunday.at("20:00").do(reeval_universe)
+
     # Run an initial check immediately
     check_signals()
 
@@ -99,6 +138,7 @@ def start_monitor() -> None:
     console.print("  - Signal check: every 4 hours")
     console.print("  - Portfolio summary: daily at 18:30")
     console.print("  - Weekly summary: Monday at 08:00")
+    console.print("  - Universe rebalance: Sunday at 20:00")
     console.print("[dim]Press Ctrl+C to stop[/dim]\n")
 
     try:

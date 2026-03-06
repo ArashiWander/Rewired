@@ -1,8 +1,11 @@
 {
-  "score": 1,
-  "color": "green",
-  "explanation": "Despite unavailable financial data, recent earnings calls and management guidance from MSFT, GOOGL, AMZN, and META consistently indicate accelerating CAPEX, primarily driven by massive investments in AI infrastructure. Management guidance remains strongly positive for continued AI-related spending.",
-  "capex_trend": "accelerating",
-  "key_signal": "Consistent management guidance and announced increases in CAPEX across all major cloud providers specifically for AI infrastructure and capabilities.",
-  "timestamp": "2026-03-05T11:37:03.865919"
+  "score": 3,
+  "color": "yellow",
+  "explanation": "Agent analysis (unstructured): [Gemini API error: all candidate models failed (gemini-3.1-pro-preview-customtools: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan ",
+  "capex_trend": "unknown",
+  "key_signal": "",
+  "key_management_quote": "",
+  "veto_triggered": false,
+  "timestamp": "2026-03-05T15:47:09.478544",
+  "schema_version": 2
 }

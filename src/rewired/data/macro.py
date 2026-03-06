@@ -144,6 +144,7 @@ def _fred_readings(fred, now: datetime) -> list[SignalReading]:
                     timestamp=now,
                     source="FRED:RSAFS",
                     detail=f"Retail Sales: {mom_pct:+.2f}% MoM",
+                    metadata={"current_value": current_val, "prev_value": prev_val},
                 ))
     except Exception:
         pass
@@ -168,6 +169,7 @@ def _fred_readings(fred, now: datetime) -> list[SignalReading]:
                 timestamp=now,
                 source="FRED:T10Y2Y",
                 detail=f"Spread: {value:.2f}%",
+                metadata={"spread_pct": value, "inverted": value < 0},
             ))
     except Exception:
         pass
@@ -228,6 +230,7 @@ def _fred_readings(fred, now: datetime) -> list[SignalReading]:
                     timestamp=now,
                     source="FRED:PAYEMS",
                     detail=f"NFP: {change_k:+.0f}K jobs MoM",
+                    metadata={"current_k": current, "prev_k": prev, "change_k": change_k},
                 ))
     except Exception:
         pass
@@ -254,6 +257,7 @@ def _fred_readings(fred, now: datetime) -> list[SignalReading]:
                 timestamp=now,
                 source="FRED:GDP",
                 detail=f"Real GDP growth: {value:.1f}%",
+                metadata={"gdp_growth_pct": value},
             ))
     except Exception:
         pass
@@ -278,6 +282,7 @@ def _fred_readings(fred, now: datetime) -> list[SignalReading]:
                 timestamp=now,
                 source="FRED:TCU",
                 detail=f"Capacity: {value:.1f}%",
+                metadata={"utilization_pct": value},
             ))
     except Exception:
         pass
@@ -303,6 +308,7 @@ def _fred_readings(fred, now: datetime) -> list[SignalReading]:
                 timestamp=now,
                 source="FRED:ICSA",
                 detail=f"{value_k:.0f}K weekly claims",
+                metadata={"raw_claims": value, "claims_k": value_k},
             ))
     except Exception:
         pass
@@ -329,6 +335,7 @@ def _fred_readings(fred, now: datetime) -> list[SignalReading]:
                 timestamp=now,
                 source="FRED:CPIAUCSL",
                 detail=f"CPI inflation: {yoy:.1f}% YoY",
+                metadata={"current_cpi": current, "year_ago_cpi": year_ago, "yoy_pct": yoy},
             ))
     except Exception:
         pass
@@ -353,6 +360,7 @@ def _fred_readings(fred, now: datetime) -> list[SignalReading]:
                 timestamp=now,
                 source="FRED:UMCSENT",
                 detail=f"UMich Sentiment: {value:.1f}",
+                metadata={"sentiment_index": value},
             ))
     except Exception:
         pass
@@ -390,6 +398,7 @@ def _proxy_readings(now: datetime) -> list[SignalReading]:
                 timestamp=now,
                 source="yfinance:TLT",
                 detail=f"TLT {pct_above_ma:+.1f}% vs 50MA",
+                metadata={"price": price, "ma50": ma50, "pct_above_ma": pct_above_ma},
             ))
     except Exception:
         pass

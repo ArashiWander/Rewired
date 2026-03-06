@@ -113,8 +113,7 @@ def _vix_term_structure(now: datetime) -> list[SignalReading]:
             timestamp=now,
             source="yfinance:VIX/VIX3M",
             detail=f"VIX3M-VIX spread: {spread:+.1f} ({structure})",
+            metadata={"vix_spot": vix, "vix3m": vix3m, "spread": spread, "structure": structure},
         )]
-    except Exception:
-        return []
     except Exception:
         return []

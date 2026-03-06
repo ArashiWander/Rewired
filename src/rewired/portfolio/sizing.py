@@ -197,8 +197,9 @@ def calculate_pies_allocation(
 ) -> list[dict]:
     """Calculate target Pies allocation for Trading 212.
 
-    Returns a list of dicts with: ticker, name, target_pct, target_eur, layer, tier.
-    This maps directly to T212 Pies - set each stock to the target percentage.
+    Returns a list of dicts with: ticker, name, target_pct, target_eur,
+    current_pct, current_eur, delta_eur, action, layer, tier, reasoning.
+    This maps directly to T212 Pies — set each stock to the target percentage.
     """
     config = _load_portfolio_config()
     overall_color = signal.overall_color
@@ -210,6 +211,8 @@ def calculate_pies_allocation(
     multiplier = multipliers.get(overall_color.value, 1.0)
     color_rules = tier_rules.get(overall_color.value, {})
     total_capital = portfolio.total_value_eur
+    # Tolerance band: 0.5% of total capital for action determination
+    tolerance_eur = total_capital * 0.005
 
     allocations = []
     total_pct = 0.0
@@ -218,51 +221,87 @@ def calculate_pies_allocation(
         tier_key = f"T{stock.tier.value}"
         rule = color_rules.get(tier_key, "hold")
 
+        tier_base = tier_alloc.get(tier_key, 0)
+        tier_stocks = universe.get_by_tier(stock.tier)
+        n_in_tier = len(tier_stocks) if tier_stocks else 1
+
         # Determine target allocation
         if rule == "exit":
             target_pct = 0.0
+            reasoning = f"Signal rule: EXIT all {tier_key} @ {overall_color.value.upper()}"
         elif rule == "trim_50":
-            # If held, trim to half of normal target; if not held, don't open
             if stock.ticker in portfolio.positions:
-                tier_base = tier_alloc.get(tier_key, 0)
-                tier_stocks = universe.get_by_tier(stock.tier)
-                normal_pct = (tier_base * multiplier / len(tier_stocks)) * 100 if tier_stocks else 0
+                normal_pct = (tier_base * multiplier / n_in_tier) * 100 if tier_stocks else 0
                 target_pct = min(normal_pct * 0.5, stock.max_weight_pct)
-            else:
-                target_pct = 0.0
-        else:
-            tier_base = tier_alloc.get(tier_key, 0)
-            tier_stocks = universe.get_by_tier(stock.tier)
-            if tier_stocks:
-                target_pct = min(
-                    (tier_base * multiplier / len(tier_stocks)) * 100,
-                    stock.max_weight_pct,
+                reasoning = (
+                    f"TRIM_50: ({tier_base}×{multiplier}/{n_in_tier})×100×0.5 "
+                    f"= {target_pct:.1f}%, cap {stock.max_weight_pct}%"
                 )
             else:
                 target_pct = 0.0
+                reasoning = f"TRIM_50: not held → 0%"
+        else:
+            if tier_stocks:
+                target_pct = min(
+                    (tier_base * multiplier / n_in_tier) * 100,
+                    stock.max_weight_pct,
+                )
+                reasoning = (
+                    f"HOLD: ({tier_base}×{multiplier}/{n_in_tier})×100 "
+                    f"= {target_pct:.1f}%, cap {stock.max_weight_pct}%"
+                )
+            else:
+                target_pct = 0.0
+                reasoning = "No stocks in tier"
 
         target_pct = round(target_pct, 1)
         target_eur = round(total_capital * target_pct / 100, 2)
         total_pct += target_pct
+
+        # Current position metrics
+        pos = portfolio.positions.get(stock.ticker)
+        current_eur = round(pos.market_value_eur, 2) if pos else 0.0
+        current_pct = round(pos.weight_pct, 1) if pos else 0.0
+        delta_eur = round(target_eur - current_eur, 2)
+
+        # Action determination
+        if delta_eur > tolerance_eur:
+            action = "BUY"
+        elif delta_eur < -tolerance_eur:
+            action = "SELL"
+        else:
+            action = "HOLD"
 
         allocations.append({
             "ticker": stock.ticker,
             "name": stock.name,
             "target_pct": target_pct,
             "target_eur": target_eur,
+            "current_pct": current_pct,
+            "current_eur": current_eur,
+            "delta_eur": delta_eur,
+            "action": action,
             "layer": f"L{stock.layer.value}",
             "tier": f"T{stock.tier.value}",
+            "reasoning": reasoning,
         })
 
     # Remaining goes to cash
     cash_pct = round(max(0, 100 - total_pct), 1)
+    cash_current = round(portfolio.cash_eur, 2) if portfolio else 0.0
+    cash_target_eur = round(total_capital * cash_pct / 100, 2)
     allocations.append({
         "ticker": "CASH",
         "name": "Cash Reserve",
         "target_pct": cash_pct,
-        "target_eur": round(total_capital * cash_pct / 100, 2),
+        "target_eur": cash_target_eur,
+        "current_pct": round(cash_current / total_capital * 100, 1) if total_capital > 0 else 0.0,
+        "current_eur": cash_current,
+        "delta_eur": round(cash_target_eur - cash_current, 2),
+        "action": "HOLD",
         "layer": "-",
         "tier": "-",
+        "reasoning": "Cash reserve",
     })
 
     return allocations

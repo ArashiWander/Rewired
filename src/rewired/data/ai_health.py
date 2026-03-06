@@ -78,6 +78,7 @@ def _semiconductor_momentum(now: datetime) -> list[SignalReading]:
             timestamp=now,
             source="yfinance:SMH",
             detail=detail,
+            metadata={"price": ma["price"], "ma50": ma["ma50"], "ma200": ma.get("ma200")},
         )]
     except Exception:
         return []
@@ -107,6 +108,7 @@ def _cloud_momentum(now: datetime) -> list[SignalReading]:
             timestamp=now,
             source="yfinance:WCLD",
             detail=f"WCLD {pct:+.1f}% vs 50MA",
+            metadata={"price": ma["price"], "ma50": ma["ma50"], "ma200": ma.get("ma200")},
         )]
     except Exception:
         return []
@@ -296,6 +298,9 @@ def _capex_analysis(now: datetime) -> list[SignalReading]:
                 "capex_trend": cache.get("capex_trend", "unknown"),
                 "veto_triggered": cache.get("veto_triggered", False),
                 "key_management_quote": cache.get("key_management_quote", ""),
+                "raw_financial_data": cache.get("raw_financial_data", ""),
+                "raw_gemini_response": cache.get("raw_gemini_response", ""),
+                "cached": True,
             },
         )]
 
@@ -307,6 +312,9 @@ def _capex_analysis(now: datetime) -> list[SignalReading]:
 
     # Run Gemini analysis
     result = _run_gemini_capex_analysis(financial_data)
+
+    # Store raw data in result for cache persistence and transparency
+    result["raw_financial_data"] = financial_data
 
     # Cache it
     _save_capex_cache(result)
@@ -326,6 +334,9 @@ def _capex_analysis(now: datetime) -> list[SignalReading]:
             "capex_trend": result.get("capex_trend", "unknown"),
             "veto_triggered": result.get("veto_triggered", False),
             "key_management_quote": result.get("key_management_quote", ""),
+            "raw_financial_data": financial_data,
+            "raw_gemini_response": result.get("explanation", ""),
+            "cached": False,
         },
     )]
 

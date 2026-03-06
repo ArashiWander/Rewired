@@ -93,3 +93,4 @@ class CompositeSignal(BaseModel):
     timestamp: datetime
     summary: str
     veto_active: bool = False
+    composite_transparency: dict = {}

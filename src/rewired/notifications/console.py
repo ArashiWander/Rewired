@@ -152,29 +152,44 @@ def print_suggestions(suggestions: list, composite) -> None:
 
 
 def print_pies_allocation(allocations: list, composite) -> None:
-    """Display the T212 Pies target allocation table."""
+    """Display the T212 Pies execution sheet with Action column."""
     overall = composite.overall_color.value
     style = SIGNAL_STYLE.get(overall, "")
 
     console.print(f"\n[bold]Signal:[/bold] [{style}]{overall.upper()}[/{style}]")
 
-    table = Table(title="Trading 212 Pies - Target Allocation", show_lines=True)
+    table = Table(title="Trading 212 Pies - Execution Sheet", show_lines=True)
     table.add_column("Ticker", style="bold", width=8)
     table.add_column("Name", width=20)
-    table.add_column("Layer", justify="center", width=6)
-    table.add_column("Tier", justify="center", width=6)
-    table.add_column("Target %", justify="right", width=10)
-    table.add_column(f"Target {EUR}", justify="right", width=12)
+    table.add_column("L\u00d7T", justify="center", width=6)
+    table.add_column("Cur %", justify="right", width=8)
+    table.add_column("Tgt %", justify="right", width=8)
+    table.add_column(f"Tgt {EUR}", justify="right", width=12)
+    table.add_column(f"\u0394 {EUR}", justify="right", width=12)
+    table.add_column("Action", justify="center", width=6)
 
-    for a in allocations:
+    _action_style = {"BUY": "bold green", "SELL": "bold red", "HOLD": "dim"}
+    _action_order = {"SELL": 0, "BUY": 1, "HOLD": 2}
+    sorted_allocs = sorted(
+        allocations,
+        key=lambda a: (_action_order.get(a.get("action", "HOLD"), 2), -abs(a.get("delta_eur", 0))),
+    )
+
+    for a in sorted_allocs:
+        action = a.get("action", "HOLD")
+        delta = a.get("delta_eur", 0)
+        act_style = _action_style.get(action, "")
         row_style = "dim" if a["ticker"] == "CASH" else ""
+        delta_str = f"{'+' if delta >= 0 else ''}{delta:,.2f} {EUR}"
         table.add_row(
             a["ticker"],
             a["name"],
-            a["layer"],
-            a["tier"],
+            f"{a['layer']}/{a['tier']}",
+            f"{a.get('current_pct', 0):.1f}%",
             f"{a['target_pct']:.1f}%",
             f"{a['target_eur']:.2f} {EUR}",
+            delta_str,
+            f"[{act_style}]{action}[/{act_style}]",
             style=row_style,
         )
 
@@ -183,8 +198,14 @@ def print_pies_allocation(allocations: list, composite) -> None:
 
     total_alloc = sum(a["target_pct"] for a in allocations if a["ticker"] != "CASH")
     cash_pct = next((a["target_pct"] for a in allocations if a["ticker"] == "CASH"), 0)
+    buy_total = sum(a.get("delta_eur", 0) for a in allocations if a.get("action") == "BUY")
+    sell_total = sum(abs(a.get("delta_eur", 0)) for a in allocations if a.get("action") == "SELL")
+    net = buy_total - sell_total
     console.print(f"\n  Allocated: [bold]{total_alloc:.1f}%[/bold]  |  "
-                  f"Cash reserve: [bold]{cash_pct:.1f}%[/bold]\n")
+                  f"Cash reserve: [bold]{cash_pct:.1f}%[/bold]")
+    console.print(f"  [green]Buy total: {buy_total:,.2f} {EUR}[/green]  |  "
+                  f"[red]Sell total: {sell_total:,.2f} {EUR}[/red]  |  "
+                  f"Net: {net:+,.2f} {EUR}\n")
 
 
 def print_regime_assessment(assessment) -> None:

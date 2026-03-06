@@ -21,7 +21,9 @@ from rewired.agent.prompts import COMPANY_EVALUATE, SYSTEM_EVALUATOR
 from rewired.models.evaluation import CompanyEvaluation, EvaluationBatch
 from rewired.models.universe import (
     LAYER_NAMES,
+    Layer,
     TIER_NAMES,
+    Tier,
     Stock,
     Universe,
     load_universe,
@@ -48,14 +50,21 @@ def evaluate_stock(stock: Stock) -> CompanyEvaluation:
 
     data_quality = _assess_data_quality(financial_data, earnings_data, metrics_data)
 
+    is_oou = "out-of-universe" in (stock.notes or "").lower()
+    layer_name = "Unclassified" if is_oou else LAYER_NAMES.get(stock.layer, "")
+    tier_name = "Unclassified" if is_oou else TIER_NAMES.get(stock.tier, "")
+    notes_text = stock.notes
+    if is_oou:
+        notes_text += " NOTE: This stock is not currently in the universe. Evaluate it as a potential candidate."
+
     prompt = COMPANY_EVALUATE.format(
         ticker=stock.ticker,
         name=stock.name,
         layer=stock.layer.value,
-        layer_name=LAYER_NAMES.get(stock.layer, ""),
+        layer_name=layer_name,
         tier=stock.tier.value,
-        tier_name=TIER_NAMES.get(stock.tier, ""),
-        notes=stock.notes,
+        tier_name=tier_name,
+        notes=notes_text,
         financial_data=financial_data or "[No financial data available]",
         earnings_data=earnings_data or "[No earnings data available]",
         metrics_data=metrics_data or "[No metrics available]",
@@ -68,25 +77,135 @@ def evaluate_stock(stock: Stock) -> CompanyEvaluation:
         max_retries=2,
     )
 
-    return _parse_evaluation(raw, stock, data_quality)
+    # Build transparency metadata
+    transparency = {
+        "financial_data": financial_data,
+        "earnings_data": earnings_data,
+        "metrics_data": metrics_data,
+        "prompt_sent": prompt,
+        "raw_gemini_response": raw,
+        "data_quality": data_quality,
+    }
+
+    return _parse_evaluation(raw, stock, data_quality, transparency=transparency)
 
 
 def evaluate_stock_by_ticker(ticker: str) -> CompanyEvaluation:
-    """Convenience: resolve ticker from universe, then evaluate."""
-    uni = load_universe()
-    stock = uni.get_stock(ticker.upper())
-    if stock is None:
+    """Evaluate a ticker with robust typo/case normalization.
+
+    Resolution strategy (direct-first, resolve-on-miss):
+    1) Universe exact lookup (literal ticker)
+    2) Direct FMP profile probe (literal ticker)
+    3) Resolver + FMP search candidates (only on miss)
+    """
+    raw_input = (ticker or "").strip()
+    requested_ticker = raw_input.upper()
+
+    if not requested_ticker:
         return CompanyEvaluation(
-            ticker=ticker.upper(),
+            ticker="",
             fundamental_score=5.0,
             ai_relevance_score=5.0,
             moat_score=5.0,
             management_score=5.0,
             composite_score=5.0,
-            reasoning=f"{ticker} is not in the Rewired Index universe.",
+            reasoning="No ticker provided.",
             data_quality="minimal",
+            in_universe=False,
         )
-    return evaluate_stock(stock)
+
+    # 1) Try the literal ticker in the universe first.
+    uni = load_universe()
+    stock = uni.get_stock(requested_ticker)
+    if stock is not None:
+        return evaluate_stock(stock)
+
+    # ── Out-of-universe fallback: hydrate from FMP ───────────────────
+    try:
+        from rewired.data.fmp import get_profile, search_ticker
+
+        # 2) Direct FMP profile probe with the literal ticker.
+        resolved_ticker = requested_ticker
+        profile = get_profile(requested_ticker)
+
+        # 3) Only if direct lookup fails, build alternative candidates.
+        if not profile:
+            candidates: list[str] = []
+
+            # a) Resolver (alias/fuzzy/FMP search)
+            try:
+                from rewired.data.ticker_resolver import resolve as resolve_ticker
+                resolved = resolve_ticker(raw_input, threshold=65, online_fallback=True)
+                if resolved is not None and resolved.ticker:
+                    candidates.append(resolved.ticker.upper())
+            except Exception:
+                pass
+
+            # b) FMP /search-name expansion
+            try:
+                for item in search_ticker(raw_input, limit=5):
+                    symbol = (item.get("symbol") or "").strip().upper()
+                    if symbol:
+                        candidates.append(symbol)
+            except Exception:
+                pass
+
+            # Deduplicate, skip already-tried ticker
+            seen: set[str] = {requested_ticker}
+            for candidate in candidates:
+                if candidate in seen:
+                    continue
+                seen.add(candidate)
+                # Check universe first for each candidate
+                stock = uni.get_stock(candidate)
+                if stock is not None:
+                    return evaluate_stock(stock)
+                profile = get_profile(candidate)
+                if profile:
+                    resolved_ticker = candidate
+                    break
+
+        if not profile:
+            tried = [requested_ticker] + (candidates[:4] if 'candidates' in dir() else [])
+            return CompanyEvaluation(
+                ticker=requested_ticker,
+                fundamental_score=5.0,
+                ai_relevance_score=5.0,
+                moat_score=5.0,
+                management_score=5.0,
+                composite_score=5.0,
+                reasoning=(
+                    f"{requested_ticker} could not be resolved to a valid FMP profile "
+                    f"(tried: {', '.join(tried)})."
+                ),
+                data_quality="minimal",
+                in_universe=False,
+            )
+
+        temp_stock = Stock(
+            ticker=resolved_ticker,
+            name=profile.get("companyName", resolved_ticker),
+            layer=Layer.L4,
+            tier=Tier.T3,
+            max_weight_pct=5.0,
+            notes="out-of-universe evaluation",
+        )
+        ev = evaluate_stock(temp_stock)
+        ev.in_universe = False
+        return ev
+    except Exception as exc:
+        logger.warning("Out-of-universe eval failed for %s: %s", resolved_ticker, exc)
+        return CompanyEvaluation(
+            ticker=resolved_ticker,
+            fundamental_score=5.0,
+            ai_relevance_score=5.0,
+            moat_score=5.0,
+            management_score=5.0,
+            composite_score=5.0,
+            reasoning=f"Evaluation failed: {exc}",
+            data_quality="minimal",
+            in_universe=False,
+        )
 
 
 # ── batch evaluation ─────────────────────────────────────────────────────
@@ -97,6 +216,10 @@ def evaluate_universe(
     tickers: list[str] | None = None,
 ) -> EvaluationBatch:
     """Evaluate all stocks (or a subset) in the universe.
+
+    Uses chunked execution (max 5 concurrent per batch) with a 2-second
+    sleep between batches to prevent HTTP 429 rate-limit errors from FMP
+    and Gemini.
 
     Parameters
     ----------
@@ -109,6 +232,9 @@ def evaluate_universe(
     -------
     An ``EvaluationBatch`` with successful evaluations and any errors.
     """
+    import time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     if universe is None:
         universe = load_universe()
 
@@ -118,13 +244,34 @@ def evaluate_universe(
         stocks = [s for s in stocks if s.ticker.upper() in upper]
 
     batch = EvaluationBatch(timestamp=datetime.now())
-    for stock in stocks:
-        try:
-            ev = evaluate_stock(stock)
-            batch.evaluations.append(ev)
-        except Exception as exc:
-            logger.warning("Evaluation failed for %s: %s", stock.ticker, exc)
-            batch.errors[stock.ticker] = str(exc)
+    chunk_size = 5
+
+    for i in range(0, len(stocks), chunk_size):
+        chunk = stocks[i : i + chunk_size]
+        chunk_tickers = [s.ticker for s in chunk]
+        logger.info(
+            "Batch %d/%d: evaluating %s",
+            i // chunk_size + 1,
+            (len(stocks) + chunk_size - 1) // chunk_size,
+            ", ".join(chunk_tickers),
+        )
+
+        with ThreadPoolExecutor(max_workers=chunk_size) as pool:
+            future_map = {
+                pool.submit(evaluate_stock, stock): stock for stock in chunk
+            }
+            for future in as_completed(future_map):
+                stock = future_map[future]
+                try:
+                    ev = future.result()
+                    batch.evaluations.append(ev)
+                except Exception as exc:
+                    logger.warning("Evaluation failed for %s: %s", stock.ticker, exc)
+                    batch.errors[stock.ticker] = str(exc)
+
+        # Rate-limit pause between batches (skip after last chunk)
+        if i + chunk_size < len(stocks):
+            time.sleep(2.0)
 
     return batch
 
@@ -261,6 +408,8 @@ def _parse_evaluation(
     raw: str,
     stock: Stock,
     data_quality: str,
+    *,
+    transparency: dict[str, Any] | None = None,
 ) -> CompanyEvaluation:
     """Parse Gemini JSON into a CompanyEvaluation, with fallback."""
     try:
@@ -299,16 +448,18 @@ def _parse_evaluation(
             reasoning=str(data.get("reasoning", ""))[:500],
             earnings_trend=_clamp_trend(data.get("earnings_trend", "stable")),
             data_quality=data_quality,
+            metadata=transparency or {},
         )
     except (json.JSONDecodeError, KeyError, TypeError, ValueError) as exc:
         logger.warning("Failed to parse evaluation for %s: %s", stock.ticker, exc)
-        return _default_evaluation(stock, reason=f"Parse error: {exc}", data_quality=data_quality)
+        return _default_evaluation(stock, reason=f"Parse error: {exc}", data_quality=data_quality, transparency=transparency)
 
 
 def _default_evaluation(
     stock: Stock,
     reason: str = "",
     data_quality: str = "minimal",
+    transparency: dict[str, Any] | None = None,
 ) -> CompanyEvaluation:
     """Return a conservative neutral evaluation."""
     return CompanyEvaluation(
@@ -321,6 +472,7 @@ def _default_evaluation(
         conviction_level="low",
         reasoning=reason or "Default evaluation — insufficient data or Gemini unavailable.",
         data_quality=data_quality,
+        metadata=transparency or {},
     )
 
 

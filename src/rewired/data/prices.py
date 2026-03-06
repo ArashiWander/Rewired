@@ -64,6 +64,41 @@ def get_moving_averages(ticker: str) -> dict[str, float | None]:
     }
 
 
+def get_daily_changes(tickers: list[str]) -> dict[str, float]:
+    """Fetch daily percentage change for a list of tickers.
+
+    Returns dict mapping ticker -> daily change % (e.g. 2.5 for +2.5%).
+    Uses 5-day history to ensure we get at least two trading days.
+    """
+    changes: dict[str, float] = {}
+    if not tickers:
+        return changes
+    try:
+        data = yf.download(tickers, period="5d", progress=False)
+        if data.empty:
+            return changes
+        close = data["Close"]
+        if isinstance(close, pd.Series):
+            # Single ticker
+            if len(close.dropna()) >= 2:
+                prev = float(close.dropna().iloc[-2])
+                curr = float(close.dropna().iloc[-1])
+                if prev > 0:
+                    changes[tickers[0]] = round((curr - prev) / prev * 100, 2)
+        else:
+            for ticker in tickers:
+                if ticker in close.columns:
+                    col = close[ticker].dropna()
+                    if len(col) >= 2:
+                        prev = float(col.iloc[-2])
+                        curr = float(col.iloc[-1])
+                        if prev > 0:
+                            changes[ticker] = round((curr - prev) / prev * 100, 2)
+    except Exception:
+        pass
+    return changes
+
+
 def get_relative_strength(ticker: str, benchmark: str = "^GSPC", period_days: int = 63) -> float | None:
     """Calculate relative strength of ticker vs benchmark over period.
 

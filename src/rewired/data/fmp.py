@@ -1,7 +1,10 @@
-"""Financial Modeling Prep (FMP) API client.
+"""Financial Modeling Prep (FMP) API client — **stable** endpoint.
 
 Provides fundamental data, financial statements, earnings, and company
 profiles.  Falls back gracefully when the API key is missing or rate-limited.
+
+As of 2025-09 FMP deprecated all ``/api/v3`` legacy endpoints.  This module
+targets the ``/stable/`` base with ``?symbol=`` query-parameter syntax.
 
 Environment variable: FMP_API_KEY
 Docs: https://site.financialmodelingprep.com/developer/docs
@@ -9,8 +12,8 @@ Docs: https://site.financialmodelingprep.com/developer/docs
 
 from __future__ import annotations
 
+import logging
 import os
-from datetime import datetime
 from typing import Any
 
 import requests
@@ -18,8 +21,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-_BASE_URL = "https://financialmodelingprep.com/api/v3"
+_BASE_URL = "https://financialmodelingprep.com/stable"
 _TIMEOUT = 15  # seconds
+
+logger = logging.getLogger(__name__)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -36,8 +41,9 @@ def _api_key() -> str:
 
 
 def _get(endpoint: str, params: dict[str, Any] | None = None) -> Any:
-    """Execute a GET against the FMP API and return parsed JSON.
+    """Execute a GET against the FMP **stable** API and return parsed JSON.
 
+    The stable API uses ``/stable/{endpoint}?symbol=X&apikey=…`` style.
     Raises ``RuntimeError`` on HTTP errors so callers can decide how to
     degrade.
     """
@@ -60,25 +66,26 @@ def get_profile(ticker: str) -> dict[str, Any]:
     if not is_configured():
         return {}
     try:
-        data = _get(f"profile/{ticker.upper()}")
+        data = _get("profile", {"symbol": ticker.upper()})
         return data[0] if data else {}
     except Exception:
         return {}
 
 
 def get_profiles(tickers: list[str]) -> dict[str, dict[str, Any]]:
-    """Batch-fetch profiles for multiple tickers.
+    """Fetch profiles for multiple tickers (sequential calls).
 
-    FMP supports comma-separated tickers in one call.
+    The stable API does not support comma-separated batch profiles, so
+    each ticker is fetched individually.
     """
     if not is_configured() or not tickers:
         return {}
-    try:
-        joined = ",".join(t.upper() for t in tickers)
-        data = _get(f"profile/{joined}")
-        return {item["symbol"]: item for item in (data or [])}
-    except Exception:
-        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for t in tickers:
+        p = get_profile(t)
+        if p:
+            result[p.get("symbol", t.upper())] = p
+    return result
 
 
 # ── financial statements ─────────────────────────────────────────────────
@@ -96,7 +103,7 @@ def get_income_statement(
     if not is_configured():
         return []
     try:
-        return _get(f"income-statement/{ticker.upper()}", {"period": period, "limit": limit}) or []
+        return _get("income-statement", {"symbol": ticker.upper(), "period": period, "limit": limit}) or []
     except Exception:
         return []
 
@@ -110,7 +117,7 @@ def get_balance_sheet(
     if not is_configured():
         return []
     try:
-        return _get(f"balance-sheet-statement/{ticker.upper()}", {"period": period, "limit": limit}) or []
+        return _get("balance-sheet-statement", {"symbol": ticker.upper(), "period": period, "limit": limit}) or []
     except Exception:
         return []
 
@@ -124,7 +131,7 @@ def get_cash_flow(
     if not is_configured():
         return []
     try:
-        return _get(f"cash-flow-statement/{ticker.upper()}", {"period": period, "limit": limit}) or []
+        return _get("cash-flow-statement", {"symbol": ticker.upper(), "period": period, "limit": limit}) or []
     except Exception:
         return []
 
@@ -137,11 +144,23 @@ def get_key_metrics(
     period: str = "annual",
     limit: int = 4,
 ) -> list[dict[str, Any]]:
-    """Fetch key financial metrics (PE, ROE, FCF yield …)."""
+    """Fetch key financial metrics (PE, ROE, FCF yield …).
+
+    Note: quarterly period requires a premium FMP plan.  Falls back to
+    annual if the quarterly request is rejected (HTTP 402).
+    """
     if not is_configured():
         return []
     try:
-        return _get(f"key-metrics/{ticker.upper()}", {"period": period, "limit": limit}) or []
+        return _get("key-metrics", {"symbol": ticker.upper(), "period": period, "limit": limit}) or []
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 402 and period != "annual":
+            logger.debug("key-metrics quarterly premium-gated for %s, falling back to annual", ticker)
+            try:
+                return _get("key-metrics", {"symbol": ticker.upper(), "period": "annual", "limit": limit}) or []
+            except Exception:
+                return []
+        return []
     except Exception:
         return []
 
@@ -151,11 +170,23 @@ def get_financial_ratios(
     period: str = "annual",
     limit: int = 4,
 ) -> list[dict[str, Any]]:
-    """Fetch financial ratios (gross margin, operating margin …)."""
+    """Fetch financial ratios (gross margin, operating margin …).
+
+    Note: quarterly period requires a premium FMP plan.  Falls back to
+    annual if the quarterly request is rejected (HTTP 402).
+    """
     if not is_configured():
         return []
     try:
-        return _get(f"ratios/{ticker.upper()}", {"period": period, "limit": limit}) or []
+        return _get("ratios", {"symbol": ticker.upper(), "period": period, "limit": limit}) or []
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 402 and period != "annual":
+            logger.debug("ratios quarterly premium-gated for %s, falling back to annual", ticker)
+            try:
+                return _get("ratios", {"symbol": ticker.upper(), "period": "annual", "limit": limit}) or []
+            except Exception:
+                return []
+        return []
     except Exception:
         return []
 
@@ -164,11 +195,15 @@ def get_financial_ratios(
 
 
 def get_earnings_surprises(ticker: str) -> list[dict[str, Any]]:
-    """Fetch historical earnings surprises (actual vs estimated EPS)."""
+    """Fetch historical earnings surprises (actual vs estimated EPS).
+
+    This endpoint may not be available on all FMP plans under the stable
+    API.  Returns an empty list when the endpoint is missing (404).
+    """
     if not is_configured():
         return []
     try:
-        return _get(f"earnings-surprises/{ticker.upper()}") or []
+        return _get("earnings-surprises", {"symbol": ticker.upper()}) or []
     except Exception:
         return []
 
@@ -182,7 +217,7 @@ def get_analyst_estimates(
     if not is_configured():
         return []
     try:
-        return _get(f"analyst-estimates/{ticker.upper()}", {"period": period, "limit": limit}) or []
+        return _get("analyst-estimates", {"symbol": ticker.upper(), "period": period, "limit": limit}) or []
     except Exception:
         return []
 
@@ -195,22 +230,35 @@ def get_quote(ticker: str) -> dict[str, Any]:
     if not is_configured():
         return {}
     try:
-        data = _get(f"quote/{ticker.upper()}")
+        data = _get("quote", {"symbol": ticker.upper()})
         return data[0] if data else {}
     except Exception:
         return {}
 
 
 def get_quotes(tickers: list[str]) -> dict[str, dict[str, Any]]:
-    """Batch-fetch quotes for multiple tickers."""
+    """Fetch quotes for multiple tickers.
+
+    The stable API may not support comma-separated batch quotes on all
+    plans, so we fall back to sequential calls when needed.
+    """
     if not is_configured() or not tickers:
         return {}
+    # Try comma-separated first (works on some plans)
     try:
         joined = ",".join(t.upper() for t in tickers)
-        data = _get(f"quote/{joined}")
-        return {item["symbol"]: item for item in (data or [])}
+        data = _get("quote", {"symbol": joined})
+        if data:
+            return {item["symbol"]: item for item in data}
     except Exception:
-        return {}
+        pass
+    # Fallback: sequential
+    result: dict[str, dict[str, Any]] = {}
+    for t in tickers:
+        q = get_quote(t)
+        if q:
+            result[q.get("symbol", t.upper())] = q
+    return result
 
 
 # ── CAPEX-specific helpers ───────────────────────────────────────────────
@@ -261,11 +309,12 @@ def get_big4_capex_summary() -> dict[str, list[dict[str, Any]]]:
 def search_ticker(query: str, limit: int = 5) -> list[dict[str, Any]]:
     """Search for a ticker by company name or partial symbol.
 
-    Returns list of ``{symbol, name, currency, stockExchange}``.
+    Uses the ``/stable/search-name`` endpoint.
+    Returns list of ``{symbol, name, currency, exchangeFullName}``.
     """
     if not is_configured():
         return []
     try:
-        return _get("search", {"query": query, "limit": limit}) or []
+        return _get("search-name", {"query": query, "limit": limit}) or []
     except Exception:
         return []

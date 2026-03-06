@@ -1,112 +1,60 @@
-"""Gemini API client wrapper."""
+"""Gemini API client wrapper — pinned model fallback chain with diagnostic logging."""
 
 from __future__ import annotations
 
+import logging
 import os
-import re
+
 from dotenv import load_dotenv
 
 load_dotenv()
 
-
-_STATIC_FALLBACK_MODELS = [
-    "gemini-2.5-pro",
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-]
+logger = logging.getLogger(__name__)
 
 
-def _normalize_model_name(name: str) -> str:
-    """Normalize SDK model names (e.g. models/gemini-2.5-pro -> gemini-2.5-pro)."""
-    if name.startswith("models/"):
-        return name.split("/", 1)[1]
-    return name
+# ── Pinned model list (no auto-discovery, no dynamic routing) ────────────
+# gemini-2.5-flash: fast, cheapest — tried first for fast feedback
+# gemini-2.5-pro:   deep reasoning, evaluation, classification
+# gemini-2.0-flash: widely available GA fallback
+# Override via GEMINI_MODEL env var (escape hatch).
+_PINNED_MODELS = ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0-flash"]
 
 
-def _model_rank(name: str) -> tuple[float, int, int, str]:
-    """Rank models so strongest Pro models are preferred first.
-
-    Higher tuple sorts first when reverse=True:
-    - version number (e.g. 3.1 > 3.0 > 2.5)
-    - pro preference over non-pro
-    - stable preference over preview/experimental
-    """
-    model = _normalize_model_name(name).lower()
-
-    version = 0.0
-    match = re.search(r"gemini-(\d+(?:\.\d+)?)", model)
-    if match:
-        try:
-            version = float(match.group(1))
-        except ValueError:
-            version = 0.0
-
-    is_pro = 1 if "-pro" in model else 0
-    is_stable = 0 if any(tag in model for tag in ("preview", "experimental", "exp")) else 1
-
-    return (version, is_pro, is_stable, model)
-
-
-def _supports_generate_content(model_obj) -> bool:
-    """Return True if a model advertises generate-content support."""
-    methods = (
-        getattr(model_obj, "supported_generation_methods", None)
-        or getattr(model_obj, "supportedGenerationMethods", None)
-        or getattr(model_obj, "supported_actions", None)
-        or []
-    )
-    normalized = [str(m).lower() for m in methods]
-    return any(
-        "generatecontent" in method
-        or "generate_content" in method
-        or method.endswith("generate")
-        for method in normalized
-    )
-
-
-def _discover_candidate_models(client) -> list[str]:
-    """Discover candidate Gemini models from API, strongest-first.
-
-    Falls back to static preference list if discovery fails or returns nothing useful.
-    """
-    discovered: list[str] = []
-
-    try:
-        for model_obj in client.models.list():
-            name = _normalize_model_name(getattr(model_obj, "name", ""))
-            if not name:
-                continue
-            lowered = name.lower()
-            if not lowered.startswith("gemini-"):
-                continue
-            if "embedding" in lowered:
-                continue
-            if not _supports_generate_content(model_obj):
-                continue
-            discovered.append(name)
-    except Exception:
-        discovered = []
-
-    if discovered:
-        discovered = sorted(set(discovered), key=_model_rank, reverse=True)
-        for fallback in _STATIC_FALLBACK_MODELS:
-            if fallback not in discovered:
-                discovered.append(fallback)
-        return discovered
-
-    return list(_STATIC_FALLBACK_MODELS)
-
-
-def _candidate_models(client) -> list[str]:
-    """Return preferred model candidates in order.
-
-    If GEMINI_MODEL is set, use it first as an explicit override.
-    """
+def _candidate_models() -> list[str]:
+    """Return the pinned model list, with optional env-var override first."""
     override = os.environ.get("GEMINI_MODEL", "").strip()
-    base = _discover_candidate_models(client)
     if override:
-        return [override, *[m for m in base if m != override]]
-    return base
+        return [override, *[m for m in _PINNED_MODELS if m != override]]
+    return list(_PINNED_MODELS)
+
+
+def list_available_models() -> list[dict]:
+    """Probe the API to list models that support generateContent.
+
+    Returns a list of dicts with 'name' and 'display_name' keys.
+    Used by ``rewired doctor`` — NOT used for routing (pinned list only).
+    """
+    from google import genai
+
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key or api_key == "your_gemini_api_key_here":
+        return []
+    try:
+        client = genai.Client(api_key=api_key)
+        result = []
+        for m in client.models.list():
+            methods = getattr(m, "supported_generation_methods", []) or []
+            if "generateContent" in methods:
+                raw_name = getattr(m, "name", "") or ""
+                name = raw_name.removeprefix("models/") if raw_name else str(m)
+                result.append({
+                    "name": name,
+                    "display_name": getattr(m, "display_name", ""),
+                })
+        return result
+    except Exception as exc:
+        logger.warning("Failed to list models: %s", exc)
+        return []
 
 
 def is_configured() -> bool:
@@ -124,10 +72,8 @@ def generate(
 ) -> str:
     """Generate a response from Gemini.
 
-    Uses the strongest available Gemini Pro model (auto-discovered), with
-    fallback to stable known models.
-
-    You can pin a model via GEMINI_MODEL in .env.
+    Tries pinned models in order: gemini-2.5-flash, gemini-2.5-pro,
+    gemini-2.0-flash. Override with GEMINI_MODEL env var.
 
     Parameters:
         prompt: The user prompt.
@@ -144,7 +90,7 @@ def generate(
 
     try:
         client = genai.Client(api_key=api_key)
-        models = _candidate_models(client)
+        models = _candidate_models()
 
         for attempt in range(1, max_retries + 2):  # +2 because range is exclusive
             config_kwargs: dict = {}
@@ -184,9 +130,11 @@ def generate(
                         config=config,
                     )
                     if response.text:
+                        logger.info("Gemini OK via %s (attempt %d)", model_name, attempt)
                         return response.text
                     return "[No response from Gemini]"
                 except Exception as model_error:
+                    logger.warning("Gemini model %s failed: %s", model_name, model_error)
                     errors.append(f"{model_name}: {model_error}")
 
             # If all models failed on this attempt, continue to next attempt
@@ -194,6 +142,7 @@ def generate(
                 continue
 
             summary = "; ".join(errors[:3]) if errors else "unknown"
+            logger.error("All candidate models failed after %d attempts: %s", max_retries + 1, summary)
             return f"[Gemini API error: all candidate models failed ({summary})]"
 
         # Should not reach here, but just in case

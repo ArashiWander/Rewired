@@ -44,6 +44,7 @@ _ALIASES: dict[str, str] = {
     "microsoft": "MSFT",
     "azure": "MSFT",
     "apple": "AAPL",
+    "appl": "AAPL",
     "nvidia": "NVDA",
     "tesla": "TSLA",
     "palantir": "PLTR",

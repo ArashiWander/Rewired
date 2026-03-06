@@ -39,6 +39,21 @@ SYSTEM_CAPEX = (
     "company is signalling a CAPEX cut.  Output ONLY valid JSON."
 )
 
+SYSTEM_CLASSIFIER = (
+    "You are an investment universe classifier for the Rewired Index — a "
+    "5-layer AI-era investment framework.  Given a company profile you must "
+    "assign it to exactly one Layer (L1-L5) and one Tier (T1-T4).  "
+    "Output ONLY valid JSON — no markdown, no explanation."
+)
+
+SYSTEM_REBALANCER = (
+    "You are the Rewired Index autonomous universe rebalancer.  You review "
+    "tier-mismatch evaluations and decide which reclassifications should be "
+    "applied.  You must follow Cold Determinism rules: never auto-promote to "
+    "T1 (require human approval), only downgrade by one tier at a time, and "
+    "provide a clear rationale for each change.  Output ONLY valid JSON."
+)
+
 
 # ── CAPEX health prompt (used by data/ai_health.py) ─────────────────────
 
@@ -171,14 +186,18 @@ PORTFOLIO STATE:
 TARGET PIES ALLOCATION (what the system recommends):
 {pies_data}
 
-Provide:
-1. A brief assessment of the current market environment (2-3 sentences)
-2. Whether the portfolio allocation aligns with the current signal color
-3. Gap analysis: which positions are overweight/underweight vs Pies targets
-4. Top 2-3 specific, actionable recommendations
-5. One key risk to watch this week
+You MUST output your analysis STRICTLY as a single Markdown table.
+Columns: Dimension | Status | Actionable Insight
+Rows MUST include exactly these dimensions:
+- Market Environment
+- Signal Alignment
+- Overweight Positions
+- Underweight Positions
+- Top Recommendation
+- Key Risk
 
-Keep it concise — this is a quick daily briefing, not a research report.
+Do NOT output any paragraph text, introductions, or conclusions outside of
+this table.  Every cell must be concise (max 30 words).
 """
 
 
@@ -189,8 +208,59 @@ Current Rewired Index signals:
 
 {signal_data}
 
-In 3-5 sentences, explain what these signals mean for AI sector investment
-positioning right now.  What is the most important thing to watch this week?
+You MUST output your analysis STRICTLY as a single Markdown table.
+Columns: Signal | Reading | Implication | Watch This Week
+Rows MUST include one row for each of: Macro, Sentiment, AI Health, and a
+final Summary row.
+
+Do NOT output any paragraph text, introductions, or conclusions outside of
+this table.  Every cell must be concise (max 25 words).
+"""
+
+
+# ── Asset classification (used by universe onboarding) ──────────────────
+
+COMPANY_CLASSIFY = """\
+Classify the following company into the Rewired Index investment universe.
+
+COMPANY PROFILE:
+- Ticker: {ticker}
+- Name: {name}
+- Sector: {sector}
+- Industry: {industry}
+- Market Cap: {market_cap}
+- Description: {description}
+
+LAYER DEFINITIONS (L dimension — structural position in the AI value chain):
+- L1: Physical Infrastructure — semiconductors, hardware, energy for AI
+- L2: Digital Infrastructure — cloud platforms, networking, data centres
+- L3: Core Intelligence — companies building foundational AI models & tools
+- L4: Dynamic Residual (Applications) — software using AI for end-user value
+- L5: Frontier Exploration — early-stage, pre-revenue or speculative AI plays
+
+TIER DEFINITIONS (T dimension — conviction & time horizon):
+- T1: Core holdings — highest conviction, buy-and-hold, 40% base allocation
+- T2: Growth engine — strong conviction, medium-term, 30% base allocation
+- T3: Thematic allocation — moderate conviction, tactical, 20% base allocation
+- T4: Speculation — low conviction, short-term, 10% base allocation
+
+INSTRUCTIONS:
+1. Assign the company to the single most appropriate Layer based on where it
+   sits in the AI value chain.  Use its primary revenue driver, not adjacent
+   business lines.
+2. Assign a Tier based on how established, profitable, and moat-protected the
+   company is.  Large-cap proven AI leaders belong in T1-T2; mid-cap or
+   volatile names in T3; pre-profit or highly speculative in T4.
+3. Suggest a max single-position weight (1.0 – 15.0 %).
+
+Respond with ONLY valid JSON:
+{{
+  "layer": "<L1|L2|L3|L4|L5>",
+  "tier": "<T1|T2|T3|T4>",
+  "max_weight_pct": <1.0-15.0>,
+  "reasoning": "<2-3 sentences explaining the classification>",
+  "confidence": <0.0-1.0>
+}}
 """
 
 
@@ -203,7 +273,75 @@ Position in framework: Layer L{layer}, Tier T{tier}
 Max weight: {max_weight_pct}%
 Notes: {notes}
 
-Does this stock's current position and recent performance justify its
-L{layer}/T{tier} classification?  Should we consider changing its tier?
-Any specific catalysts or risks to note?  Keep it to 4-6 sentences.
+You MUST output your analysis STRICTLY as a single Markdown table.
+Columns: Aspect | Assessment | Action
+Rows MUST include exactly: Classification Fit, Recent Performance,
+Catalysts, Risks, Tier Recommendation.
+
+Do NOT output any paragraph text, introductions, or conclusions outside of
+this table.  Every cell must be concise (max 25 words).
+"""
+
+
+# ── Universe rebalancer (used by agent/rebalancer.py) ────────────────────
+
+UNIVERSE_REBALANCE = """\
+The Rewired Index evaluator has flagged the following tier mismatches after
+a full universe evaluation scan.
+
+TIER MISMATCHES:
+{mismatches}
+
+CURRENT UNIVERSE STATE:
+{universe_state}
+
+RULES (Cold Determinism):
+1. NEVER auto-promote any stock to T1 — flag it as "needs_human_approval".
+2. Only change tier by ONE step at a time (e.g. T2→T3, not T2→T4).
+3. Provide confidence (0.0-1.0) for each proposed change.
+4. If confidence < 0.6, flag as "monitor_only" instead of "apply".
+
+Respond with ONLY valid JSON:
+{{{{
+  "changes": [
+    {{{{
+      "ticker": "<TICKER>",
+      "current_tier": "<T1|T2|T3|T4>",
+      "proposed_tier": "<T1|T2|T3|T4>",
+      "action": "<apply|monitor_only|needs_human_approval>",
+      "confidence": <0.0-1.0>,
+      "reason": "<1-2 sentences>"
+    }}}}
+  ],
+  "summary": "<1-2 sentences overall assessment>"
+}}}}
+"""
+
+TIER_DOWNGRADE_CHECK = """\
+Verify whether the following tier downgrade should proceed.
+
+STOCK: {ticker} ({name})
+CURRENT TIER: T{current_tier}
+PROPOSED TIER: T{proposed_tier}
+
+EVALUATION DATA:
+- Composite Score: {composite_score}/10
+- Fundamental Score: {fundamental_score}/10
+- AI Relevance: {ai_relevance_score}/10
+- Moat: {moat_score}/10
+- Conviction: {conviction_level}
+- Earnings Trend: {earnings_trend}
+- Reasoning: {reasoning}
+
+QUESTIONS TO ANSWER:
+1. Is the downgrade justified by the data, or could it be a temporary dip?
+2. Would this downgrade cause excessive portfolio churn?
+3. Is there an upcoming catalyst (earnings, product launch) that should delay this?
+
+Respond with ONLY valid JSON:
+{{{{
+  "proceed": <true|false>,
+  "reason": "<2-3 sentences>",
+  "delay_until": "<null|ISO date if should wait>"
+}}}}
 """
