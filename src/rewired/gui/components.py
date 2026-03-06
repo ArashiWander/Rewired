@@ -25,6 +25,43 @@ REGIME_COLORS = {
 }
 
 
+# ── Colour-coded status helpers ──────────────────────────────────────────────
+
+_ALL_COLORS = {**SIGNAL_COLORS, **REGIME_COLORS}
+def _color_hex(color_value: str) -> str:
+    """Return the hex colour for a signal/regime colour name."""
+    return _ALL_COLORS.get(color_value.lower().strip(), "#888")
+
+
+def _colored_status_label(color_value: str, extra_classes: str = "") -> None:
+    """Render a NiceGUI label for a signal colour word styled in its matching hex colour."""
+    ui.label(color_value.upper()).style(
+        f"color:{_color_hex(color_value)};font-weight:bold"
+    ).classes(extra_classes)
+
+
+def _add_color_cell_slot(table, column_name: str, color_field: str | None = None) -> None:
+    """Add a body-cell slot to *table* that renders *column_name* in a row-provided colour.
+
+    The previous implementation injected a JS-side object literal into the
+    Vue template. NiceGUI's client-side compiler can choke on that when the
+    tab is mounted, blanking the entire panel. Using a plain row field keeps
+    the template simple and avoids client-side syntax errors.
+    """
+    color_field = color_field or f"{column_name}_hex"
+    table.add_slot(
+        f'body-cell-{column_name}',
+        r'<q-td :props="props">'
+        r'<span :style="{'
+        + f"color: props.row.{color_field} || '#888',"
+        + r"fontWeight: 'bold'"
+        + r'}">'
+        '{{ props.value }}'
+        '</span>'
+        '</q-td>',
+    )
+
+
 # ── Header Components ────────────────────────────────────────────────────────
 
 
@@ -222,7 +259,7 @@ def actions_logic_explainer(composite) -> None:
 
         with ui.row().classes("items-center q-mt-sm"):
             ui.label(t("actions.composite_label")).classes("text-bold")
-            ui.label(overall.upper()).classes("text-bold")
+            _colored_status_label(overall, "text-bold")
 
 
 def actions_playbook(composite, suggestions: list[dict]) -> None:
@@ -478,9 +515,9 @@ def signal_drilldown(composite) -> None:
         hex_color = SIGNAL_COLORS.get(color, "#888")
 
         with ui.expansion(
-            f"{label} -- {color.upper()}",
+            f"{label} \u2014 {color.upper()}",
             icon="circle",
-        ).classes("w-full"):
+        ).classes("w-full").style(f"--q-color-primary:{hex_color}"):
             if not cat_sig.readings:
                 ui.label(t("signal.no_readings")).classes("text-grey")
                 continue
@@ -499,11 +536,13 @@ def signal_drilldown(composite) -> None:
                     "name": r.name,
                     "value": f"{r.value:.2f}",
                     "color": r.color.value.upper(),
+                    "color_hex": _color_hex(r.color.value),
                     "detail": smart_truncate(r.detail, 60),
                     "source": r.source,
                 })
 
-            ui.table(columns=columns, rows=rows, row_key="name").classes("w-full")
+            tbl = ui.table(columns=columns, rows=rows, row_key="name").classes("w-full")
+            _add_color_cell_slot(tbl, 'color')
 
             # ── Transparency: raw metadata accordion ──────────────
             readings_with_meta = [r for r in cat_sig.readings if r.metadata]
@@ -574,14 +613,20 @@ def signal_history_timeline(history: list[dict]) -> None:
 
         rows = []
         for entry in reversed(history[-20:]):
+            from_color = entry.get("from_color", "?")
+            to_color = entry.get("to_color", "?")
             rows.append({
                 "time": entry.get("timestamp", "?"),
-                "from_c": entry.get("from_color", "?").upper(),
-                "to_c": entry.get("to_color", "?").upper(),
+                "from_c": from_color.upper(),
+                "from_c_hex": _color_hex(from_color),
+                "to_c": to_color.upper(),
+                "to_c_hex": _color_hex(to_color),
                 "summary": entry.get("summary", ""),
             })
 
-        ui.table(columns=columns, rows=rows, row_key="time").classes("w-full")
+        tbl = ui.table(columns=columns, rows=rows, row_key="time").classes("w-full")
+        _add_color_cell_slot(tbl, 'from_c')
+        _add_color_cell_slot(tbl, 'to_c')
 
 
 # ── Tab 3: Portfolio ─────────────────────────────────────────────────────────
@@ -870,29 +915,6 @@ def interactive_universe_panel(on_change=None, heatmap_data: dict | None = None)
                                 "flat dense size=sm color=primary"
                             )
 
-                            async def _reevaluate(stock=stk):
-                                feedback.set_text(t("heatmap.reevaluating", ticker=stock.ticker))
-                                feedback.style("color:#eab308")
-                                try:
-                                    from rewired.models.universe import onboard_ticker
-                                    updated = await _run_in_thread(onboard_ticker, stock.ticker)
-                                    feedback.set_text(
-                                        t("heatmap.reevaluated",
-                                          ticker=updated.ticker,
-                                          layer=updated.layer.value,
-                                          tier=updated.tier.value)
-                                    )
-                                    feedback.style("color:#22c55e")
-                                    if on_change:
-                                        await on_change()
-                                except Exception as exc:
-                                    feedback.set_text(f"Re-evaluate failed: {exc}")
-                                    feedback.style("color:#ef4444")
-
-                            ui.button(icon="refresh", on_click=_reevaluate).props(
-                                "flat dense size=sm color=accent"
-                            ).tooltip(t("heatmap.reevaluate"))
-
                             async def _remove(stock=stk):
                                 from rewired.portfolio.manager import load_portfolio
                                 pf = await _run_in_thread(load_portfolio)
@@ -997,46 +1019,159 @@ def interactive_universe_panel(on_change=None, heatmap_data: dict | None = None)
 # ── Tab 4: Analysis ──────────────────────────────────────────────────────────
 
 
-def ai_analysis_panel() -> None:
-    """Render the AI analysis panel with on-demand Gemini analysis."""
+def ai_copilot_panel() -> None:
+    """Render the AI Copilot (System Spirit) panel.
+
+    Provides a briefing button, a chat interface for follow-up questions,
+    and the regime / raw-data displays.  Conversation history is session-only
+    (cleared on page refresh).
+    """
+    # ── Session-local conversation store ──────────────────────────
+    conversation: list[dict[str, str]] = []
+
+    async def _with_timeout(func, *args, timeout_s: int = 90):
+        """Run *func* in a thread with a timeout; raise on expiry."""
+        import asyncio
+        return await asyncio.wait_for(
+            _run_in_thread(func, *args), timeout=timeout_s,
+        )
+
+    # ── Spirit Briefing card ──────────────────────────────────────
     with ui.card().classes("w-full"):
-        ui.label(t("analysis.title")).classes("text-h5 q-mb-md")
+        ui.label("System Spirit").classes("text-h5 q-mb-sm")
+        ui.markdown(
+            "Read-only AI Copilot. It can **see** all signals and positions "
+            "but has **zero authority** to change them."
+        ).classes("text-caption text-grey q-mb-sm")
 
-        ui.markdown(t("analysis.intro"))
+        briefing_output = ui.markdown("*Click the button below to generate a market briefing.*")
 
-        output_area = ui.markdown(t("analysis.placeholder"))
+        async def _briefing_click():
+            briefing_output.set_content("Generating briefing...")
+            elapsed = ui.label("\u231b 0 s").classes("text-caption text-grey")
+            _t = {"s": 0, "active": True}
 
-        async def run_analysis_click():
-            output_area.set_content(t("analysis.running"))
+            async def _tick():
+                if not _t["active"]:
+                    return
+                _t["s"] += 1
+                try:
+                    elapsed.set_text(f"\u231b {_t['s']} s")
+                except RuntimeError:
+                    _t["active"] = False
+
+            timer = ui.timer(1.0, _tick)
             try:
-                from rewired.agent.analyst import run_analysis
-                result = await _run_in_thread(run_analysis)
-                output_area.set_content(result)
-            except Exception as e:
-                output_area.set_content(t("analysis.error", err=str(e)))
-
-        async def run_regime_click():
-            output_area.set_content(t("analysis.running_regime"))
-            try:
-                from rewired.agent.analyst import market_regime_assessment
-                result = await _run_in_thread(market_regime_assessment)
-                regime_label = result.regime.upper().replace("_", " ")
-                hex_color = REGIME_COLORS.get(result.regime, "#888")
-                text = (
-                    f"{t('analysis.regime_label')} <span style='color:{hex_color}'>{regime_label}</span> "
-                    f"(confidence: {result.confidence:.0%})\n\n"
-                    f"{result.reasoning}\n\n"
-                    f"{t('analysis.action_label')} {result.actionable_insight}\n\n"
-                    f"{t('analysis.risk_label')} {result.key_risk}\n\n"
-                    f"{t('analysis.shift_prob')} {result.regime_shift_probability:.0%}"
+                from rewired.agent.analyst import generate_briefing
+                result = await _with_timeout(generate_briefing, timeout_s=90)
+                briefing_output.set_content(result)
+                conversation.append({"role": "spirit", "text": result[:500]})
+            except TimeoutError:
+                briefing_output.set_content(
+                    "**\u26a0 Briefing timed out** (> 90 s).  "
+                    "Gemini may be overloaded \u2014 please try again later."
                 )
-                output_area.set_content(text)
             except Exception as e:
-                output_area.set_content(t("analysis.error", err=str(e)))
+                briefing_output.set_content(f"**Error:** {e}")
+            finally:
+                _t["active"] = False
+                timer.cancel()
+                try:
+                    elapsed.delete()
+                except RuntimeError:
+                    pass
 
         with ui.row().classes("q-mt-sm"):
-            ui.button(t("analysis.btn_analysis"), on_click=run_analysis_click, icon="analytics")
-            ui.button(t("analysis.btn_regime"), on_click=run_regime_click, icon="assessment")
+            ui.button("Generate Briefing", on_click=_briefing_click, icon="auto_awesome")
+
+    # ── Chat card ─────────────────────────────────────────────────
+    with ui.card().classes("w-full q-mt-sm"):
+        ui.label("Ask the Spirit").classes("text-h6 q-mb-sm")
+
+        chat_container = ui.column().classes("w-full gap-2")
+        chat_container.style(
+            "max-height: 400px; overflow-y: auto; padding: 8px; "
+            "border: 1px solid #333; border-radius: 8px; background: #1a1a2e;"
+        )
+
+        def _render_bubble(role: str, text: str) -> None:
+            """Add a chat bubble to the container."""
+            is_user = role == "user"
+            align = "items-end" if is_user else "items-start"
+            bg = "#2d2d44" if is_user else "#1e3a5f"
+            label_text = "You" if is_user else "Spirit"
+            with chat_container:
+                with ui.column().classes(f"w-full {align}"):
+                    with ui.card().style(
+                        f"background: {bg}; max-width: 80%; padding: 8px 12px;"
+                    ):
+                        ui.label(label_text).classes("text-caption text-grey")
+                        ui.markdown(text).classes("text-body2")
+
+        with ui.row().classes("w-full q-mt-sm items-end gap-2"):
+            chat_input = ui.input(
+                placeholder="Ask about signals, portfolio, rules...",
+            ).classes("flex-grow").props('outlined dense')
+
+            async def _send():
+                question = (chat_input.value or "").strip()
+                if not question:
+                    return
+                chat_input.set_value("")
+                conversation.append({"role": "user", "text": question})
+                _render_bubble("user", question)
+
+                # Show thinking indicator
+                thinking_label = None
+                with chat_container:
+                    thinking_label = ui.label("Spirit is thinking...").classes(
+                        "text-caption text-grey italic"
+                    )
+
+                try:
+                    from rewired.agent.analyst import ask_followup
+                    answer = await _with_timeout(
+                        ask_followup, question, list(conversation), timeout_s=90,
+                    )
+                    conversation.append({"role": "spirit", "text": answer})
+                    if thinking_label:
+                        thinking_label.delete()
+                    _render_bubble("spirit", answer)
+                except TimeoutError:
+                    if thinking_label:
+                        thinking_label.delete()
+                    _render_bubble("spirit", "\u26a0 Timed out. Try a shorter question.")
+                except Exception as e:
+                    if thinking_label:
+                        thinking_label.delete()
+                    _render_bubble("spirit", f"\u26a0 Error: {e}")
+
+            send_btn = ui.button(icon="send", on_click=_send).props("flat dense color=primary")
+            chat_input.on("keydown.enter", _send)
+
+    # ── Regime Assessment card (deterministic, no Gemini) ─────────
+    with ui.card().classes("w-full q-mt-sm"):
+        ui.label("Regime Assessment").classes("text-h6 q-mb-sm")
+        regime_output = ui.markdown("")
+
+        async def _regime_click():
+            regime_output.set_content("Computing regime...")
+            try:
+                from rewired.agent.analyst import market_regime_assessment
+                result = await _with_timeout(market_regime_assessment, timeout_s=30)
+                regime_label = result.regime.upper().replace("_", " ")
+                text = (
+                    f"**Regime:** {regime_label} "
+                    f"(confidence: {result.confidence:.0%})\n\n"
+                    f"{result.reasoning}\n\n"
+                    f"**Action:** {result.actionable_insight}\n\n"
+                    f"**Key Risk:** {result.key_risk}"
+                )
+                regime_output.set_content(text)
+            except Exception as e:
+                regime_output.set_content(f"**Error:** {e}")
+
+        ui.button("Compute Regime", on_click=_regime_click, icon="assessment").props("flat")
 
     # ── Raw Source Data Dump (D4) ─────────────────────────────────
     with ui.card().classes("w-full q-mt-sm"):
@@ -1066,10 +1201,14 @@ def ai_analysis_panel() -> None:
                         # Macro data
                         ui.label("MACRO (FRED)").classes("text-bold text-h6 q-mt-sm")
                         for r in macro_readings:
+                            color_val = r.color.value.upper()
+                            hex_c = _color_hex(r.color.value)
                             with ui.expansion(
-                                f"{r.name} = {r.value:.4f}  [{r.color.value.upper()}]",
+                                f"{r.name} = {r.value:.4f}  [{color_val}]",
                                 icon="show_chart",
-                            ).classes("w-full").props("dense"):
+                            ).classes("w-full").props("dense").style(
+                                f"--q-color-primary:{hex_c}"
+                            ):
                                 ui.label(r.detail).classes("text-caption text-grey")
                                 ui.label(f"Source: {r.source}").classes("text-caption")
                                 if r.metadata:
@@ -1081,10 +1220,14 @@ def ai_analysis_panel() -> None:
                         # Sentiment data
                         ui.label("SENTIMENT (VIX / yfinance)").classes("text-bold text-h6 q-mt-md")
                         for r in sent_readings:
+                            color_val = r.color.value.upper()
+                            hex_c = _color_hex(r.color.value)
                             with ui.expansion(
-                                f"{r.name} = {r.value:.4f}  [{r.color.value.upper()}]",
+                                f"{r.name} = {r.value:.4f}  [{color_val}]",
                                 icon="show_chart",
-                            ).classes("w-full").props("dense"):
+                            ).classes("w-full").props("dense").style(
+                                f"--q-color-primary:{hex_c}"
+                            ):
                                 ui.label(r.detail).classes("text-caption text-grey")
                                 ui.label(f"Source: {r.source}").classes("text-caption")
                                 if r.metadata:
@@ -1315,46 +1458,12 @@ def trade_recording_form(on_trade_recorded) -> None:
                 async def _auto_classify():
                     try:
                         def _classify():
-                            import json as _json
                             from rewired.data.fmp import get_profile
                             profile = get_profile(val)
                             if not profile:
                                 return None
                             name = profile.get("companyName", val)
-                            sector = profile.get("sector", "Unknown")
-                            industry = profile.get("industry", "Unknown")
-                            mkt = profile.get("mktCap", 0)
-                            desc = (profile.get("description") or "")[:500]
-                            result = {"name": name, "layer": 4, "tier": 3, "max_weight": 5.0}
-                            try:
-                                from rewired.agent.gemini import generate, is_configured as gc
-                                from rewired.agent.prompts import COMPANY_CLASSIFY, SYSTEM_CLASSIFIER
-                                if gc():
-                                    fmt_cap = f"${mkt / 1e9:.1f}B" if mkt and mkt > 0 else "N/A"
-                                    prompt = COMPANY_CLASSIFY.format(
-                                        ticker=val, name=name, sector=sector,
-                                        industry=industry, market_cap=fmt_cap,
-                                        description=desc,
-                                    )
-                                    raw = generate(prompt, system_instruction=SYSTEM_CLASSIFIER, json_output=True, max_retries=2)
-                                    text = raw.strip()
-                                    if text.startswith("```"):
-                                        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-                                    if text.endswith("```"):
-                                        text = text[:-3]
-                                    text = text.strip()
-                                    if text.startswith("json"):
-                                        text = text[4:].strip()
-                                    data = _json.loads(text)
-                                    from rewired.models.universe import Layer as _L, Tier as _T
-                                    l_str = str(data.get("layer", "L4")).upper().strip()
-                                    t_str = str(data.get("tier", "T3")).upper().strip()
-                                    result["layer"] = _L[l_str].value if l_str in _L.__members__ else 4
-                                    result["tier"] = _T[t_str].value if t_str in _T.__members__ else 3
-                                    result["max_weight"] = max(1.0, min(15.0, float(data.get("max_weight_pct", 5.0))))
-                            except Exception:
-                                pass
-                            return result
+                            return {"name": name, "layer": 4, "tier": 3, "max_weight": 5.0}
                         info = await _run_in_thread(_classify)
                         if info:
                             stock_name_input.set_value(info["name"])
@@ -1541,7 +1650,7 @@ def transaction_history_table(portfolio) -> None:
 
         rows = []
         for i, tx in enumerate(reversed(portfolio.transactions)):
-            sig_color = tx.signal_color_at_time.value.upper() if tx.signal_color_at_time else "-"
+            sig_val = tx.signal_color_at_time.value if tx.signal_color_at_time else "-"
             rows.append({
                 "id": i,
                 "date": str(tx.date),
@@ -1550,13 +1659,15 @@ def transaction_history_table(portfolio) -> None:
                 "shares": f"{tx.shares:.4f}",
                 "price": f"{tx.price_eur:.2f}",
                 "total": f"{tx.shares * tx.price_eur:.2f}",
-                "signal": sig_color,
+                "signal": sig_val.upper() if sig_val != "-" else "-",
+                "signal_hex": _color_hex(sig_val) if sig_val != "-" else "#888",
                 "notes": tx.notes or "-",
             })
 
-        ui.table(
+        tbl = ui.table(
             columns=columns, rows=rows, row_key="id", pagination={"rowsPerPage": 15}
         ).classes("w-full")
+        _add_color_cell_slot(tbl, 'signal')
 
 
 # ── Monitor Control Panel ────────────────────────────────────────────────────
@@ -1811,8 +1922,8 @@ def universe_management_card(on_change=None) -> None:
 def universe_onboarding_card(on_change=None) -> None:
     """Standalone card to add a stock to the universe by ticker only.
 
-    Uses FMP profile hydration + Gemini COMPANY_CLASSIFY for automatic
-    Layer/Tier assignment.  The user only needs to type a ticker.
+    Uses FMP profile hydration for name lookup.  Defaults to L4/T3/5%.
+    The user only needs to type a ticker.
     """
     with ui.card().classes("w-full"):
         ui.label(t("onboard.title")).classes("text-h5 q-mb-md")
@@ -1865,189 +1976,225 @@ def universe_onboarding_card(on_change=None) -> None:
 # ── Tab 6: Evaluation ────────────────────────────────────────────────────────
 
 
-def evaluation_panel() -> None:
-    """Render the per-company evaluation panel with on-demand Gemini evaluation."""
+def oracle_gateway_panel() -> None:
+    """Oracle JSON Gateway — accept external AI evaluations to manage universe."""
+    from rewired.models.universe import (
+        Layer, Tier, Stock, load_universe, save_universe,
+    )
+
+    _EXAMPLE_SINGLE = """\
+{
+  "ticker": "NVDA",
+  "name": "NVIDIA Corporation",
+  "layer": "L1",
+  "tier": "T1",
+  "max_weight_pct": 15.0,
+  "notes": "Dominant AI GPU supplier"
+}"""
+
+    _EXAMPLE_BATCH = """\
+[
+  {
+    "ticker": "NVDA",
+    "name": "NVIDIA Corporation",
+    "layer": "L1",
+    "tier": "T1",
+    "max_weight_pct": 15.0,
+    "notes": "Dominant AI GPU supplier"
+  },
+  {
+    "ticker": "PLTR",
+    "name": "Palantir Technologies",
+    "layer": "L4",
+    "tier": "T3",
+    "max_weight_pct": 5.0,
+    "notes": "AI analytics platform"
+  }
+]"""
+
+    _LAYER_MAP = {"L1": Layer.L1, "L2": Layer.L2, "L3": Layer.L3,
+                  "L4": Layer.L4, "L5": Layer.L5}
+    _TIER_MAP = {"T1": Tier.T1, "T2": Tier.T2, "T3": Tier.T3, "T4": Tier.T4}
+
+    def _strip_fences(text: str) -> str:
+        """Strip markdown code fences before JSON parsing."""
+        text = text.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        text = text.strip()
+        if text.startswith("json"):
+            text = text[4:].strip()
+        return text
+
+    def _validate_entry(raw: dict) -> tuple[dict | None, str]:
+        """Validate a single Oracle entry dict. Returns (clean, error)."""
+        import json as _json
+
+        ticker = str(raw.get("ticker", "")).strip().upper()
+        if not ticker:
+            return None, "Missing required field: ticker"
+
+        name = str(raw.get("name", "")).strip()
+        if not name:
+            return None, f"{ticker}: Missing required field: name"
+
+        layer_str = str(raw.get("layer", "")).strip().upper()
+        if layer_str not in _LAYER_MAP:
+            return None, f"{ticker}: Invalid layer '{raw.get('layer')}'. Must be L1-L5."
+
+        tier_str = str(raw.get("tier", "")).strip().upper()
+        if tier_str not in _TIER_MAP:
+            return None, f"{ticker}: Invalid tier '{raw.get('tier')}'. Must be T1-T4."
+
+        try:
+            max_w = float(raw.get("max_weight_pct", 0))
+        except (ValueError, TypeError):
+            return None, f"{ticker}: max_weight_pct must be a number."
+        if not 1.0 <= max_w <= 15.0:
+            return None, f"{ticker}: max_weight_pct must be between 1.0 and 15.0 (got {max_w})."
+
+        notes = str(raw.get("notes", "")).strip()
+
+        return {
+            "ticker": ticker,
+            "name": name,
+            "layer": layer_str,
+            "tier": tier_str,
+            "max_weight_pct": max_w,
+            "notes": notes,
+        }, ""
+
     with ui.card().classes("w-full"):
-        ui.label(t("eval.title")).classes("text-h5 q-mb-md")
-        ui.markdown(t("eval.intro"))
+        ui.label("Oracle JSON Gateway").classes("text-h5 q-mb-md")
+        ui.markdown(
+            "Paste a **JSON object** (single stock) or **JSON array** (batch) "
+            "generated by your external AI oracle. The system will validate, "
+            "then upsert each entry into `universe.yaml`."
+        )
 
-        eval_output = ui.column().classes("w-full gap-4")
+        json_input = ui.textarea(
+            label="Paste Oracle JSON here",
+            placeholder='{ "ticker": "NVDA", ... }',
+        ).classes("w-full font-mono").props("rows=12 outlined")
 
-        def _eval_clear() -> bool:
-            """Safely clear eval_output; returns False if client gone."""
-            try:
-                eval_output.clear()
-                return True
-            except RuntimeError:
-                return False
+        result_area = ui.column().classes("w-full gap-2 q-mt-sm")
 
-        async def run_single_eval():
-            ticker_val = (ticker_in.value or "").strip().upper()
-            if not ticker_val:
+        async def _submit():
+            import json as _json
+
+            raw_text = (json_input.value or "").strip()
+            if not raw_text:
+                ui.notify("Paste some JSON first.", type="warning")
                 return
-            if not _eval_clear():
-                return
-            with eval_output:
-                ui.label(t("eval.running", ticker=ticker_val)).classes("text-grey")
+
+            result_area.clear()
+            cleaned = _strip_fences(raw_text)
+
             try:
-                from rewired.agent.evaluator import evaluate_stock_by_ticker
-                ev = await _run_in_thread(evaluate_stock_by_ticker, ticker_val)
-                if not _eval_clear():
-                    return
-                with eval_output:
-                    _render_single_evaluation(ev)
-            except Exception as e:
-                if not _eval_clear():
-                    return
-                with eval_output:
-                    ui.label(t("eval.error", err=str(e))).classes("text-red")
-
-        async def run_universe_eval():
-            if not _eval_clear():
+                parsed = _json.loads(cleaned)
+            except _json.JSONDecodeError as e:
+                with result_area:
+                    ui.label(f"JSON parse error: {e}").classes("text-red")
                 return
-            with eval_output:
-                ui.label(t("eval.running_all")).classes("text-grey")
+
+            entries = parsed if isinstance(parsed, list) else [parsed]
+
+            if not entries:
+                with result_area:
+                    ui.label("Empty JSON array.").classes("text-orange")
+                return
+
+            # Validate all entries first
+            valid_entries: list[dict] = []
+            errors: list[str] = []
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    errors.append(f"Expected object, got {type(entry).__name__}")
+                    continue
+                clean, err = _validate_entry(entry)
+                if err:
+                    errors.append(err)
+                else:
+                    valid_entries.append(clean)
+
+            if errors:
+                with result_area:
+                    ui.label("Validation errors:").classes("text-red text-bold")
+                    for err_msg in errors:
+                        ui.label(f"  \u2022 {err_msg}").classes("text-red text-sm")
+
+            if not valid_entries:
+                return
+
+            # Apply to universe
+            def _apply():
+                from datetime import datetime
+                uni = load_universe()
+                results_log = []
+                for entry in valid_entries:
+                    existing = uni.get_stock(entry["ticker"])
+                    if existing:
+                        existing.name = entry["name"]
+                        existing.layer = _LAYER_MAP[entry["layer"]]
+                        existing.tier = _TIER_MAP[entry["tier"]]
+                        existing.max_weight_pct = entry["max_weight_pct"]
+                        existing.notes = entry["notes"]
+                        existing.last_tier_change = datetime.now()
+                        results_log.append(("UPDATED", entry["ticker"], entry))
+                    else:
+                        stock = Stock(
+                            ticker=entry["ticker"],
+                            name=entry["name"],
+                            layer=_LAYER_MAP[entry["layer"]],
+                            tier=_TIER_MAP[entry["tier"]],
+                            max_weight_pct=entry["max_weight_pct"],
+                            notes=entry["notes"],
+                            last_tier_change=datetime.now(),
+                        )
+                        uni.stocks.append(stock)
+                        results_log.append(("ADDED", entry["ticker"], entry))
+                save_universe(uni)
+                return results_log
+
             try:
-                from rewired.agent.evaluator import evaluate_universe
-                batch = await _run_in_thread(evaluate_universe)
-                if not _eval_clear():
-                    return
-                with eval_output:
-                    _render_evaluation_batch(batch)
-            except Exception as e:
-                if not _eval_clear():
-                    return
-                with eval_output:
-                    ui.label(t("eval.error", err=str(e))).classes("text-red")
+                log = await _run_in_thread(_apply)
+            except Exception as exc:
+                with result_area:
+                    ui.label(f"Save error: {exc}").classes("text-red")
+                return
 
-        with ui.row().classes("items-end gap-3 q-mt-sm"):
-            ticker_in = ui.input(
-                t("eval.ticker_label"), placeholder="NVDA"
-            ).classes("w-48")
-            ui.button(
-                t("eval.btn_single"), on_click=run_single_eval, icon="person_search"
-            ).props("color=primary")
-            ui.button(
-                t("eval.btn_universe"), on_click=run_universe_eval, icon="groups"
-            ).props("outline")
+            # Invalidate GUI cache
+            try:
+                from rewired.gui.state import dashboard_state
+                dashboard_state.refresh_all()
+            except Exception:
+                pass
 
+            with result_area:
+                ui.label(f"Successfully processed {len(log)} stock(s):").classes(
+                    "text-green text-bold"
+                )
+                for action, ticker, entry in log:
+                    ui.label(
+                        f"  {action}: {ticker} \u2192 {entry['layer']}/T{entry['tier'][-1]}  "
+                        f"max_weight={entry['max_weight_pct']:.1f}%"
+                    ).classes("text-sm")
 
-def _render_single_evaluation(ev) -> None:
-    """Render a single CompanyEvaluation with radar chart + details."""
-    from rewired.gui.charts import evaluation_radar_chart
+            ui.notify(f"Oracle: {len(log)} stock(s) processed.", type="positive")
 
-    with ui.row().classes("w-full gap-4 items-start"):
-        with ui.column().classes("w-1/2"):
-            evaluation_radar_chart(ev, height="300px")
-        with ui.column().classes("w-1/2 gap-2"):
-            score = ev.composite_score
-            if score >= 7.5:
-                style = "color:#22c55e"
-            elif score >= 5.0:
-                style = "color:#eab308"
-            elif score >= 3.0:
-                style = "color:#f97316"
-            else:
-                style = "color:#ef4444"
+        ui.button(
+            "Validate & Submit", on_click=_submit, icon="upload",
+        ).props("color=primary").classes("q-mt-sm")
 
-            ui.label(f"{ev.ticker}").classes("text-h5")
-            if hasattr(ev, 'in_universe') and not ev.in_universe:
-                ui.label(t("eval.not_in_universe")).classes("text-caption text-orange q-ml-sm")
-            ui.html(f'<span style="{style};font-size:1.5em;font-weight:bold">{ev.composite_score:.1f}/10</span>')
-            ui.label(
-                f"{t('eval.score_fundamental')}: {ev.fundamental_score:.1f}  |  "
-                f"{t('eval.score_ai_rel')}: {ev.ai_relevance_score:.1f}  |  "
-                f"{t('eval.score_moat')}: {ev.moat_score:.1f}  |  "
-                f"{t('eval.score_mgmt')}: {ev.management_score:.1f}"
-            ).classes("text-caption")
-            ui.label(f"{t('eval.conviction_label')}: {ev.conviction_level.upper()}  |  "
-                      f"{t('eval.earnings_label')}: {ev.earnings_trend}  |  "
-                      f"{t('eval.data_quality_label')}: {ev.data_quality}").classes("text-caption text-grey")
-
-            if not ev.tier_appropriate and ev.suggested_tier_change:
-                ui.label(t("eval.tier_mismatch", tier=ev.suggested_tier_change)).style("color:#f97316")
-            if ev.biggest_catalyst:
-                ui.html(f'<span style="color:#22c55e">{t("eval.catalyst_label")}:</span> {ev.biggest_catalyst}')
-            if ev.biggest_risk:
-                ui.html(f'<span style="color:#ef4444">{t("eval.risk_label")}:</span> {ev.biggest_risk}')
-            if ev.reasoning:
-                ui.label(ev.reasoning).classes("text-caption text-grey q-mt-sm")
-
-    # ── Transparency: raw input data accordion ────────────────────
-    if ev.metadata:
-        with ui.expansion(
-            t("transparency.raw_data"),
-            icon="data_object",
-        ).classes("w-full q-mt-sm").props("dense"):
-            if ev.metadata.get("financial_data"):
-                with ui.expansion(t("transparency.fmp_data"), icon="account_balance").classes("w-full").props("dense"):
-                    ui.code(ev.metadata["financial_data"]).classes("w-full")
-            if ev.metadata.get("earnings_data"):
-                with ui.expansion(t("transparency.earnings_data"), icon="trending_up").classes("w-full").props("dense"):
-                    ui.code(ev.metadata["earnings_data"]).classes("w-full")
-            if ev.metadata.get("metrics_data"):
-                with ui.expansion(t("transparency.metrics_data"), icon="analytics").classes("w-full").props("dense"):
-                    ui.code(ev.metadata["metrics_data"]).classes("w-full")
-            if ev.metadata.get("prompt_sent"):
-                with ui.expansion(t("transparency.prompt"), icon="psychology").classes("w-full").props("dense"):
-                    ui.code(ev.metadata["prompt_sent"]).classes("w-full")
-            if ev.metadata.get("raw_gemini_response"):
-                with ui.expansion(t("transparency.gemini_response"), icon="smart_toy").classes("w-full").props("dense"):
-                    ui.code(ev.metadata["raw_gemini_response"]).classes("w-full")
-
-
-def _render_evaluation_batch(batch) -> None:
-    """Render a full batch of evaluations with bar chart + table."""
-    from rewired.gui.charts import evaluation_bar_chart
-
-    if batch.evaluations:
-        evaluation_bar_chart(batch.evaluations, height="380px")
-
-    # Summary table
-    columns = [
-        {"name": "ticker", "label": t("eval.col_ticker"), "field": "ticker", "align": "left", "sortable": True},
-        {"name": "composite", "label": t("eval.col_score"), "field": "composite", "align": "right", "sortable": True},
-        {"name": "fundamental", "label": t("eval.col_fund"), "field": "fundamental", "align": "right"},
-        {"name": "ai_rel", "label": t("eval.col_ai_rel"), "field": "ai_rel", "align": "right"},
-        {"name": "moat", "label": t("eval.col_moat"), "field": "moat", "align": "right"},
-        {"name": "mgmt", "label": t("eval.col_mgmt"), "field": "mgmt", "align": "right"},
-        {"name": "conviction", "label": t("eval.col_conviction"), "field": "conviction", "align": "center"},
-        {"name": "trend", "label": t("eval.col_trend"), "field": "trend", "align": "center"},
-        {"name": "tier_ok", "label": t("eval.col_tier_ok"), "field": "tier_ok", "align": "center"},
-    ]
-
-    rows = []
-    for ev in sorted(batch.evaluations, key=lambda e: e.composite_score, reverse=True):
-        rows.append({
-            "ticker": ev.ticker,
-            "composite": f"{ev.composite_score:.1f}",
-            "fundamental": f"{ev.fundamental_score:.1f}",
-            "ai_rel": f"{ev.ai_relevance_score:.1f}",
-            "moat": f"{ev.moat_score:.1f}",
-            "mgmt": f"{ev.management_score:.1f}",
-            "conviction": ev.conviction_level.upper(),
-            "trend": ev.earnings_trend,
-            "tier_ok": t("eval.yes") if ev.tier_appropriate else ev.suggested_tier_change or t("eval.no"),
-        })
-
-    ui.table(columns=columns, rows=rows, row_key="ticker").classes("w-full q-mt-md")
-
-    if batch.errors:
-        ui.label(t("eval.errors", tickers=", ".join(batch.errors.keys()))).classes("text-caption text-grey q-mt-sm")
-    ui.label(
-        t("eval.success_rate",
-          rate=f"{batch.success_rate:.0%}",
-          ok=len(batch.evaluations),
-          total=len(batch.evaluations) + len(batch.errors))
-    ).classes("text-caption text-grey")
-
-    # Tier mismatches
-    mismatches = batch.tier_mismatches()
-    if mismatches:
-        with ui.card().classes("w-full q-mt-md"):
-            ui.label(t("eval.tier_mismatches")).classes("text-h6")
-            for ev in mismatches:
-                ui.label(f"{ev.ticker}: {t('eval.tier_mismatch', tier=ev.suggested_tier_change)} \u2014 {ev.reasoning[:80]}").classes("text-caption")
+    # Example JSON template
+    with ui.card().classes("w-full q-mt-md"):
+        ui.label("Example JSON Templates").classes("text-bold text-lg")
+        ui.label("Single stock:").classes("text-sm text-grey q-mt-sm")
+        ui.code(_EXAMPLE_SINGLE, language="json").classes("w-full")
+        ui.label("Batch (array of stocks):").classes("text-sm text-grey q-mt-sm")
+        ui.code(_EXAMPLE_BATCH, language="json").classes("w-full")
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

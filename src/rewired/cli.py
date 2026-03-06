@@ -18,8 +18,11 @@ def signals():
     """Show current signal lights (macro, sentiment, AI health)."""
     from rewired.signals.engine import compute_signals
     from rewired.notifications.console import print_signals
+    from rich.console import Console
 
-    result = compute_signals()
+    con = Console()
+    with con.status("[dim]Computing signals...[/dim]"):
+        result = compute_signals()
     print_signals(result)
 
 
@@ -159,29 +162,7 @@ def history():
     print_signal_history()
 
 
-@main.command("evaluate")
-@click.option("--ticker", "-t", default=None, help="Evaluate a single ticker (e.g. NVDA)")
-@click.option("--all", "all_stocks", is_flag=True, help="Evaluate entire universe")
-def evaluate_cmd(ticker, all_stocks):
-    """Run Gemini per-company fundamental evaluation."""
-    if not ticker and not all_stocks:
-        console.print("[dim]Specify --ticker NVDA or --all to evaluate the universe.[/dim]")
-        return
-
-    if all_stocks:
-        from rewired.agent.evaluator import evaluate_universe
-        from rewired.notifications.console import print_evaluation_batch
-
-        console.print("[dim]Evaluating full universe (this may take a minute)...[/dim]")
-        batch = evaluate_universe()
-        print_evaluation_batch(batch)
-    else:
-        from rewired.agent.evaluator import evaluate_stock_by_ticker
-        from rewired.notifications.console import print_evaluation
-
-        console.print(f"[dim]Evaluating {ticker.upper()}...[/dim]")
-        ev = evaluate_stock_by_ticker(ticker)
-        print_evaluation(ev)
+# evaluate command removed — company evaluation decoupled to Oracle JSON Gateway
 
 
 @main.command("resolve")
@@ -204,43 +185,32 @@ def resolve_cmd(query):
 
 
 @main.command("rebalance")
-@click.option("--dry-run", is_flag=True, help="Show proposed changes without applying them")
+@click.option("--dry-run", is_flag=True, help="Preview only (no-op, universe is read-only)")
 def rebalance_cmd(dry_run):
-    """Run the autonomous universe rebalancer (evaluate + reclassify tiers)."""
+    """Show current universe state (L×T snapshot)."""
     from rewired.agent.rebalancer import rebalance_universe
 
-    mode = "[dim](dry run)[/dim]" if dry_run else ""
-    console.print(f"[dim]Running universe rebalance... {mode}[/dim]")
-    changes = rebalance_universe(dry_run=dry_run)
+    console.print("[dim]Loading universe snapshot...[/dim]")
+    snapshot = rebalance_universe(dry_run=dry_run)
 
-    if not changes:
-        console.print("[green]Universe is aligned — no tier changes needed.[/green]")
+    if not snapshot:
+        console.print("[yellow]Universe is empty.[/yellow]")
         return
 
-    for c in changes:
-        action = c.get("action", "?")
-        ticker = c.get("ticker", "?")
-        current = c.get("current_tier", "?")
-        proposed = c.get("proposed_tier", "?")
-        reason = c.get("reason", "")[:80]
-        confidence = c.get("confidence", 0)
-
-        if action == "applied":
-            console.print(f"  [green]APPLIED[/green] {ticker}: {current} -> {proposed} (conf={confidence:.1%}) {reason}")
-        elif action == "needs_human_approval":
-            console.print(f"  [yellow]NEEDS APPROVAL[/yellow] {ticker}: {current} -> {proposed} {reason}")
-        elif action == "cooldown_blocked":
-            console.print(f"  [dim]COOLDOWN[/dim] {ticker}: skipped (too recent)")
-        elif action == "verification_rejected":
-            console.print(f"  [red]REJECTED[/red] {ticker}: {current} -> {proposed} {reason}")
-        else:
-            console.print(f"  [dim]{action.upper()}[/dim] {ticker}: {reason}")
+    console.print(f"[bold]Universe: {len(snapshot)} stocks[/bold]\n")
+    for s in snapshot:
+        ticker = s.get("ticker", "?")
+        name = s.get("name", "")
+        layer = s.get("layer", "?")
+        tier = s.get("tier", "?")
+        weight = s.get("max_weight_pct", 0)
+        console.print(f"  {ticker:<10} {layer}/{tier}  max={weight:.1f}%  {name}")
 
 
 @universe.command("add")
 @click.argument("ticker")
 def universe_add(ticker):
-    """Add a stock to the universe (auto-classified via FMP + Gemini)."""
+    """Add a stock to the universe (validated via FMP, defaults to L4/T3/5%)."""
     from rewired.models.universe import onboard_ticker
 
     ticker = ticker.strip().upper()
@@ -346,9 +316,8 @@ def execute_cmd(dry_run, live, broker):
 @main.command("pipeline")
 @click.option("--dry-run", is_flag=True, default=True, help="Full DAG run without placing trades")
 @click.option("--live", is_flag=True, help="Execute trades at the end of the pipeline")
-@click.option("--evaluate", is_flag=True, help="Include per-company evaluation step")
 @click.option("--notify/--no-notify", default=True, help="Send Telegram notifications")
-def pipeline_cmd(dry_run, live, evaluate, notify):
+def pipeline_cmd(dry_run, live, notify):
     """Run the full end-to-end DAG pipeline."""
     if live:
         dry_run = False
@@ -358,7 +327,6 @@ def pipeline_cmd(dry_run, live, evaluate, notify):
     console.print("[bold]Rewired Index — Full Pipeline[/bold]\n")
     run_pipeline(
         dry_run=dry_run,
-        include_evaluation=evaluate,
         send_notifications=notify,
     )
 
@@ -399,3 +367,102 @@ def doctor():
         console.print(f"[red]FAILED:[/red] {result}")
     else:
         console.print(f"[green]SUCCESS:[/green] {result[:80]}")
+
+
+@main.command()
+@click.option("--capital", required=True, type=float, help="New total capital in EUR")
+@click.option("--force", is_flag=True, required=True, help="Mandatory safety flag")
+def reset(capital, force):
+    """Factory reset: purge portfolio state and reinitialise the shadow ledger.
+
+    This destroys ALL cached state and resets to a clean starting position.
+    Requires both --capital and --force flags.
+    """
+    from rewired.portfolio.manager import factory_reset
+
+    factory_reset(capital)
+    console.print(f"\n[bold green]Reset complete.[/bold green] Capital: {capital:.2f} EUR")
+
+
+@main.command()
+@click.option("--inject", type=float, default=None, help="Inject cash (EUR)")
+@click.option("--withdraw", type=float, default=None, help="Withdraw cash (EUR)")
+@click.option("--reason", default="", help="Optional note for the ledger entry")
+def capital(inject, withdraw, reason):
+    """Inject or withdraw cash without wiping the portfolio."""
+    if inject is None and withdraw is None:
+        console.print("[dim]Specify --inject <EUR> or --withdraw <EUR>[/dim]")
+        return
+
+    from rewired.portfolio.manager import load_portfolio, adjust_capital, save_portfolio
+
+    pf = load_portfolio()
+    amount = inject if inject is not None else -withdraw
+    try:
+        tx = adjust_capital(pf, amount, reason)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise SystemExit(1)
+    save_portfolio(pf)
+
+    label = "Injected" if amount > 0 else "Withdrew"
+    console.print(f"[green]{label} {abs(amount):.2f} EUR[/green]  Cash: {pf.cash_eur:.2f} EUR")
+
+
+@main.group(invoke_without_command=True)
+@click.pass_context
+def trades(ctx):
+    """Show or manage the transaction ledger."""
+    if ctx.invoked_subcommand is None:
+        from rewired.portfolio.manager import load_portfolio
+
+        pf = load_portfolio()
+        if not pf.transactions:
+            console.print("[dim]No transactions recorded.[/dim]")
+            return
+        for i, tx in enumerate(pf.transactions):
+            color = "green" if tx.action in ("BUY", "DEPOSIT") else "red"
+            ticker = tx.ticker or "--"
+            console.print(
+                f"  [{color}]{i:>3}[/{color}]  {tx.id}  {tx.date}  {tx.action:<8} "
+                f"{ticker:<8} {tx.shares:>8.4f} x {tx.price_eur:>10.2f} EUR  {tx.notes}"
+            )
+
+
+@trades.command("delete")
+@click.argument("tx_id")
+@click.option("--force", is_flag=True, help="Skip confirmation")
+def trades_delete(tx_id, force):
+    """Delete a transaction by its ID and replay the ledger."""
+    from rewired.portfolio.manager import load_portfolio, delete_transaction, save_portfolio
+
+    pf = load_portfolio()
+    # Allow lookup by index (integer) or by hex id
+    try:
+        idx = int(tx_id)
+        if 0 <= idx < len(pf.transactions):
+            tx_id = pf.transactions[idx].id
+    except ValueError:
+        pass
+
+    # Find the tx for confirmation display
+    match = next((t for t in pf.transactions if t.id == tx_id), None)
+    if match is None:
+        console.print(f"[red]Transaction not found:[/red] {tx_id}")
+        raise SystemExit(1)
+
+    if not force:
+        console.print(
+            f"Delete: {match.action} {match.ticker or '--'} "
+            f"{match.shares:.4f} x {match.price_eur:.2f}  ({match.date})?"
+        )
+        if not click.confirm("Confirm deletion", default=False):
+            console.print("[dim]Aborted.[/dim]")
+            return
+
+    ok = delete_transaction(pf, tx_id)
+    if ok:
+        save_portfolio(pf)
+        console.print(f"[green]Deleted & replayed.[/green] Cash: {pf.cash_eur:.2f} EUR")
+    else:
+        console.print(f"[red]Transaction not found:[/red] {tx_id}")

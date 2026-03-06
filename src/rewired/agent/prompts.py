@@ -20,39 +20,24 @@ SYSTEM_ANALYST = (
     "not opinions."
 )
 
-SYSTEM_EVALUATOR = (
-    "You are a strict fundamental equity evaluator.  You receive structured "
-    "financial data and must produce a deterministic JSON assessment.  Never "
-    "invent data.  If a field is unknowable from the inputs, set it to null.  "
-    "Output ONLY valid JSON — no markdown, no explanation."
-)
+# SYSTEM_EVALUATOR removed — company evaluation decoupled to Oracle Gateway
 
 SYSTEM_REGIME = (
     "You are a financial regime analyst.  Output ONLY valid JSON."
 )
 
 SYSTEM_CAPEX = (
-    "You are an expert AI-sector capital-expenditure analyst.  Evaluate the "
-    "CAPEX trends of the Big 4 hyperscalers (MSFT, GOOGL, AMZN, META) to "
-    "determine the health of the AI infrastructure build-out.  Focus on "
-    "quarter-over-quarter trends, management commentary, and whether any "
-    "company is signalling a CAPEX cut.  Output ONLY valid JSON."
+    "You are an expert AI-sector capital-expenditure data extractor.  You receive "
+    "actual quarterly financial data and recent SEC filings for the Big 4 hyperscalers "
+    "(MSFT, GOOGL, AMZN, META).  Your ONLY job is to extract factual CAPEX numbers "
+    "and verbatim management quotes.  You must NOT perform trend analysis, scoring, "
+    "or subjective assessment.  Output ONLY valid JSON — no markdown, no code fences, "
+    "no explanation."
 )
 
-SYSTEM_CLASSIFIER = (
-    "You are an investment universe classifier for the Rewired Index — a "
-    "5-layer AI-era investment framework.  Given a company profile you must "
-    "assign it to exactly one Layer (L1-L5) and one Tier (T1-T4).  "
-    "Output ONLY valid JSON — no markdown, no explanation."
-)
+# SYSTEM_CLASSIFIER removed — classification decoupled to Oracle Gateway
 
-SYSTEM_REBALANCER = (
-    "You are the Rewired Index autonomous universe rebalancer.  You review "
-    "tier-mismatch evaluations and decide which reclassifications should be "
-    "applied.  You must follow Cold Determinism rules: never auto-promote to "
-    "T1 (require human approval), only downgrade by one tier at a time, and "
-    "provide a clear rationale for each change.  Output ONLY valid JSON."
-)
+# SYSTEM_REBALANCER removed — rebalancer simplified to read universe.yaml directly
 
 
 # ── CAPEX health prompt (used by data/ai_health.py) ─────────────────────
@@ -60,116 +45,72 @@ SYSTEM_REBALANCER = (
 CAPEX_HEALTH = """\
 {earnings_context}
 
-Based on the latest available earnings data and public statements above,
-evaluate the AI infrastructure CAPEX cycle for each Big 4 hyperscaler
-(Microsoft, Alphabet/Google, Amazon, Meta).
+Based on the quarterly financial data and SEC filings above, extract the
+following CAPEX facts for each Big 4 hyperscaler (Microsoft, Alphabet/Google,
+Amazon, Meta).
 
-Score the overall AI CAPEX health on a 1-4 scale:
-- 4 = GREEN: All CAPEX accelerating, strong AI spending commitments
-- 3 = YELLOW: CAPEX stable/plateau, no cuts signaled
-- 2 = ORANGE: CAPEX growth decelerating, cautious management tone
-- 1 = RED: Any Big 4 signaling or executing CAPEX CUT (VETO trigger)
+For EACH company you MUST provide:
+- capex_absolute_bn: float — most recent quarter CapEx in billions USD (pure number)
+- qoq_growth_pct: float — quarter-over-quarter CapEx growth percentage
+- yoy_growth_pct: float — year-over-year CapEx growth percentage
+- explicit_guidance_cut_mentioned: boolean — True ONLY if management explicitly
+  stated they are reducing or cutting future AI/cloud infrastructure spending.
+  "Optimizing" or "reprioritizing" does NOT count as a cut.
+- exact_capex_quote: string — the most relevant verbatim quote from management
+  regarding CapEx plans (max 2 sentences)
 
-CRITICAL: If ANY of the Big 4 is cutting AI/cloud CAPEX, the score MUST be 1 (RED).
-This overrides everything else.
+CRITICAL RULES:
+- All numeric fields MUST be pure floats (e.g. 14.2, not "14.2 billion")
+- If data for a company is unavailable, use 0.0 for numbers, false for booleans,
+  and "data unavailable" for strings
+- Do NOT perform any trend analysis, scoring, or subjective assessment
+- Do NOT wrap your response in markdown code fences
 
-Respond with ONLY valid JSON (no markdown, no code fences):
+Respond with ONLY this exact JSON structure:
 {{
-  "score": <1-4>,
-  "trend": "<accelerating|stable|decelerating|contracting>",
-  "veto_triggered": <true|false>,
-  "key_management_quote": "<most relevant direct quote about CAPEX plans>",
-  "reasoning": "<2-3 sentences explaining the assessment>",
-  "company_details": {{
-    "MSFT": "<1-2 sentence CAPEX assessment>",
-    "GOOGL": "<1-2 sentence CAPEX assessment>",
-    "AMZN": "<1-2 sentence CAPEX assessment>",
-    "META": "<1-2 sentence CAPEX assessment>"
+  "MSFT": {{
+    "capex_absolute_bn": <float>,
+    "qoq_growth_pct": <float>,
+    "yoy_growth_pct": <float>,
+    "explicit_guidance_cut_mentioned": <true|false>,
+    "exact_capex_quote": "<verbatim quote>"
+  }},
+  "GOOGL": {{
+    "capex_absolute_bn": <float>,
+    "qoq_growth_pct": <float>,
+    "yoy_growth_pct": <float>,
+    "explicit_guidance_cut_mentioned": <true|false>,
+    "exact_capex_quote": "<verbatim quote>"
+  }},
+  "AMZN": {{
+    "capex_absolute_bn": <float>,
+    "qoq_growth_pct": <float>,
+    "yoy_growth_pct": <float>,
+    "explicit_guidance_cut_mentioned": <true|false>,
+    "exact_capex_quote": "<verbatim quote>"
+  }},
+  "META": {{
+    "capex_absolute_bn": <float>,
+    "qoq_growth_pct": <float>,
+    "yoy_growth_pct": <float>,
+    "explicit_guidance_cut_mentioned": <true|false>,
+    "exact_capex_quote": "<verbatim quote>"
   }}
 }}
-"""
+
+WARNING: If your response is not valid JSON matching this exact schema, you
+will be penalized and the request will be retried with your error appended.
+"""""
 
 
-# ── Per-company evaluation (used by agent/evaluator.py) ──────────────────
-
-COMPANY_EVALUATE = """\
-Evaluate {ticker} ({name}) as a potential holding in the Rewired Index AI
-investment framework.
-
-COMPANY POSITION:
-- Layer: L{layer} ({layer_name})
-- Tier : T{tier} ({tier_name})
-- Notes: {notes}
-
-FINANCIAL DATA (FMP):
-{financial_data}
-
-RECENT EARNINGS:
-{earnings_data}
-
-KEY METRICS:
-{metrics_data}
-
-INSTRUCTIONS:
-1. Assess the company's fundamentals relative to its LxT position.
-2. Evaluate management quality, competitive moat, and AI relevance.
-3. Determine if the current tier classification is appropriate.
-4. Identify the single biggest risk and single biggest catalyst.
-
-Respond with ONLY valid JSON:
-{{
-  "ticker": "{ticker}",
-  "fundamental_score": <1-10>,
-  "ai_relevance_score": <1-10>,
-  "moat_score": <1-10>,
-  "management_score": <1-10>,
-  "composite_score": <1.0-10.0>,
-  "tier_appropriate": <true|false>,
-  "suggested_tier_change": "<null|T1|T2|T3|T4>",
-  "biggest_risk": "<one sentence>",
-  "biggest_catalyst": "<one sentence>",
-  "conviction_level": "<high|medium|low>",
-  "reasoning": "<3-4 sentences summarizing the assessment>",
-  "earnings_trend": "<improving|stable|deteriorating>"
-}}
-"""
+# COMPANY_EVALUATE removed — company evaluation decoupled to Oracle Gateway
 
 
 # ── Market regime assessment ─────────────────────────────────────────────
 
-REGIME_ASSESS = """\
-Given the following Rewired Index data, produce a market regime assessment.
-
-CURRENT SIGNALS:
-{signal_data}
-
-PORTFOLIO STATE:
-{portfolio_data}
-
-TARGET PIES ALLOCATION:
-{pies_data}
-
-Assess the overall market regime by considering ALL signals together — macro
-conditions, sentiment, and AI structural health.  Consider cross-signal
-divergences (e.g. strong AI health but weak macro could signal a narrowing
-rally).
-
-Respond with ONLY valid JSON:
-{{
-  "regime": "<risk_on|neutral|risk_off|crisis>",
-  "confidence": <0.0-1.0>,
-  "reasoning": "<2-3 sentences explaining the regime and cross-signal dynamics>",
-  "actionable_insight": "<one specific, concrete action for this 3 100 EUR T212 portfolio>",
-  "key_risk": "<the single most important risk to monitor this week>",
-  "regime_shift_probability": <0.0-1.0 probability of regime change in next 2 weeks>
-}}
-
-REGIME DEFINITIONS:
-- risk_on : Broad strength across signals, favorable for full allocation
-- neutral : Mixed signals, maintain current positions, limit new entries
-- risk_off: Deteriorating conditions, defensive positioning warranted
-- crisis  : Multiple RED signals, capital preservation mode
-"""
+# REGIME_ASSESS removed — regime is now computed deterministically by the
+# Boolean truth-table waterfall in signals/composite.py + hysteresis state
+# machine in signals/engine.py.  Do NOT reintroduce LLM-based regime assessment.
 
 
 # ── Full portfolio analysis ──────────────────────────────────────────────
@@ -186,8 +127,10 @@ PORTFOLIO STATE:
 TARGET PIES ALLOCATION (what the system recommends):
 {pies_data}
 
-You MUST output your analysis STRICTLY as a single Markdown table.
-Columns: Dimension | Status | Actionable Insight
+You MUST structure your response in exactly two sections:
+
+## Raw Data
+Output a Markdown table with these columns: Dimension | Status | Value
 Rows MUST include exactly these dimensions:
 - Market Environment
 - Signal Alignment
@@ -196,8 +139,15 @@ Rows MUST include exactly these dimensions:
 - Top Recommendation
 - Key Risk
 
-Do NOT output any paragraph text, introductions, or conclusions outside of
-this table.  Every cell must be concise (max 30 words).
+Every cell must be concise (max 30 words).
+
+## Interpretation
+Write a concise paragraph (3-5 sentences) explaining what the data above means
+in plain language.  **Bold** the key phrases and main conclusions so users can
+quickly scan the takeaways.  For example: "**Signals are aligned bullish**,
+suggesting the portfolio can stay fully deployed."
+
+Do NOT output any other sections, introductions, or sign-offs.
 """
 
 
@@ -220,48 +170,7 @@ this table.  Every cell must be concise (max 25 words).
 
 # ── Asset classification (used by universe onboarding) ──────────────────
 
-COMPANY_CLASSIFY = """\
-Classify the following company into the Rewired Index investment universe.
-
-COMPANY PROFILE:
-- Ticker: {ticker}
-- Name: {name}
-- Sector: {sector}
-- Industry: {industry}
-- Market Cap: {market_cap}
-- Description: {description}
-
-LAYER DEFINITIONS (L dimension — structural position in the AI value chain):
-- L1: Physical Infrastructure — semiconductors, hardware, energy for AI
-- L2: Digital Infrastructure — cloud platforms, networking, data centres
-- L3: Core Intelligence — companies building foundational AI models & tools
-- L4: Dynamic Residual (Applications) — software using AI for end-user value
-- L5: Frontier Exploration — early-stage, pre-revenue or speculative AI plays
-
-TIER DEFINITIONS (T dimension — conviction & time horizon):
-- T1: Core holdings — highest conviction, buy-and-hold, 40% base allocation
-- T2: Growth engine — strong conviction, medium-term, 30% base allocation
-- T3: Thematic allocation — moderate conviction, tactical, 20% base allocation
-- T4: Speculation — low conviction, short-term, 10% base allocation
-
-INSTRUCTIONS:
-1. Assign the company to the single most appropriate Layer based on where it
-   sits in the AI value chain.  Use its primary revenue driver, not adjacent
-   business lines.
-2. Assign a Tier based on how established, profitable, and moat-protected the
-   company is.  Large-cap proven AI leaders belong in T1-T2; mid-cap or
-   volatile names in T3; pre-profit or highly speculative in T4.
-3. Suggest a max single-position weight (1.0 – 15.0 %).
-
-Respond with ONLY valid JSON:
-{{
-  "layer": "<L1|L2|L3|L4|L5>",
-  "tier": "<T1|T2|T3|T4>",
-  "max_weight_pct": <1.0-15.0>,
-  "reasoning": "<2-3 sentences explaining the classification>",
-  "confidence": <0.0-1.0>
-}}
-"""
+# COMPANY_CLASSIFY removed — classification decoupled to Oracle Gateway
 
 
 # ── Stock analysis ───────────────────────────────────────────────────────
@@ -285,63 +194,73 @@ this table.  Every cell must be concise (max 25 words).
 
 # ── Universe rebalancer (used by agent/rebalancer.py) ────────────────────
 
-UNIVERSE_REBALANCE = """\
-The Rewired Index evaluator has flagged the following tier mismatches after
-a full universe evaluation scan.
+# UNIVERSE_REBALANCE and TIER_DOWNGRADE_CHECK removed — rebalancer simplified
 
-TIER MISMATCHES:
-{mismatches}
 
-CURRENT UNIVERSE STATE:
-{universe_state}
+# ── System Spirit (read-only AI Copilot) ─────────────────────────────────
 
-RULES (Cold Determinism):
-1. NEVER auto-promote any stock to T1 — flag it as "needs_human_approval".
-2. Only change tier by ONE step at a time (e.g. T2→T3, not T2→T4).
-3. Provide confidence (0.0-1.0) for each proposed change.
-4. If confidence < 0.6, flag as "monitor_only" instead of "apply".
+SYSTEM_SPIRIT = (
+    "You are the Rewired Index System Spirit — a read-only AI Copilot "
+    "embedded in a deterministic investment system.  You can SEE all signals, "
+    "portfolio positions, and allocation targets, but you have ZERO authority "
+    "to change any of them.  The regime signal (RED/ORANGE/YELLOW/GREEN) is "
+    "computed by hardcoded boolean rules, NOT by you.  Your role is strictly "
+    "to EXPLAIN what the system is doing and why, in plain language.\n\n"
+    "Rules:\n"
+    "- Never recommend specific buy/sell actions.  Say what the SYSTEM "
+    "recommends and explain the logic behind it.\n"
+    "- Never claim to control or influence the signal, sizing, or "
+    "allocation.  You are an observer and narrator.\n"
+    "- Refer to signal colors and rule names when explaining.\n"
+    "- Be concise, direct, data-driven.  Bold key phrases.\n"
+    "- Currency is EUR.  The portfolio is on Trading 212."
+)
 
-Respond with ONLY valid JSON:
-{{{{
-  "changes": [
-    {{{{
-      "ticker": "<TICKER>",
-      "current_tier": "<T1|T2|T3|T4>",
-      "proposed_tier": "<T1|T2|T3|T4>",
-      "action": "<apply|monitor_only|needs_human_approval>",
-      "confidence": <0.0-1.0>,
-      "reason": "<1-2 sentences>"
-    }}}}
-  ],
-  "summary": "<1-2 sentences overall assessment>"
-}}}}
+MARKET_BRIEFING = """\
+Generate a concise market briefing for the Rewired Index portfolio.
+
+CURRENT SIGNALS:
+{signal_data}
+
+PORTFOLIO STATE:
+{portfolio_data}
+
+TARGET ALLOCATION:
+{pies_data}
+
+Structure your briefing EXACTLY like this:
+
+## Regime
+One sentence: current signal color, the rule that triggered it, and whether
+a veto is active.
+
+## Portfolio Snapshot
+2-3 bullet points: total value, cash %, top position, biggest drift from
+target.
+
+## What the System Is Doing
+2-3 sentences explaining what the constraint solver would do next (buys,
+sells, rebalance) and WHY, referencing the specific signal rules.
+
+## Watch List
+2-3 bullet points: data releases or events this week that could shift the
+signal.
+
+Do NOT add introductions, sign-offs, or disclaimers.
 """
 
-TIER_DOWNGRADE_CHECK = """\
-Verify whether the following tier downgrade should proceed.
+SPIRIT_FOLLOWUP = """\
+Conversation so far:
+{history}
 
-STOCK: {ticker} ({name})
-CURRENT TIER: T{current_tier}
-PROPOSED TIER: T{proposed_tier}
+Current system state (read-only context):
+- Signals: {signal_summary}
+- Portfolio value: {portfolio_value} EUR | Cash: {cash_pct}%
 
-EVALUATION DATA:
-- Composite Score: {composite_score}/10
-- Fundamental Score: {fundamental_score}/10
-- AI Relevance: {ai_relevance_score}/10
-- Moat: {moat_score}/10
-- Conviction: {conviction_level}
-- Earnings Trend: {earnings_trend}
-- Reasoning: {reasoning}
+User question:
+{question}
 
-QUESTIONS TO ANSWER:
-1. Is the downgrade justified by the data, or could it be a temporary dip?
-2. Would this downgrade cause excessive portfolio churn?
-3. Is there an upcoming catalyst (earnings, product launch) that should delay this?
-
-Respond with ONLY valid JSON:
-{{{{
-  "proceed": <true|false>,
-  "reason": "<2-3 sentences>",
-  "delay_until": "<null|ISO date if should wait>"
-}}}}
+Answer concisely.  If the question is about a signal or rule, cite the
+specific rule name and threshold.  If it asks you to DO something (trade,
+change signal, override), politely decline and explain you are read-only.
 """

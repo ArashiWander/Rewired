@@ -846,6 +846,18 @@ _STRINGS: dict[str, dict[Lang, str]] = {
         Lang.EN: "Signal data unavailable.",
         Lang.ZH: "\u4fe1\u53f7\u6570\u636e\u4e0d\u53ef\u7528\u3002",
     },
+    "app.loading": {
+        Lang.EN: "Loading data\u2026",
+        Lang.ZH: "\u52a0\u8f7d\u6570\u636e\u4e2d\u2026",
+    },
+    "app.section_error": {
+        Lang.EN: "{section} failed to load",
+        Lang.ZH: "{section} \u52a0\u8f7d\u5931\u8d25",
+    },
+    "app.try_refresh": {
+        Lang.EN: "Click Refresh to try again.",
+        Lang.ZH: "\u70b9\u51fb\u5237\u65b0\u91cd\u8bd5\u3002",
+    },
 
     # ── Universe management ──────────────────────────────────────────
     "unimgmt.title": {

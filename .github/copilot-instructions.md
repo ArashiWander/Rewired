@@ -10,7 +10,7 @@ Agentic Decision System: external data → boolean rules engine → composite si
 data/*.py (yfinance, FRED, Gemini+EDGAR)
   → signals/rules.py (boolean IF-THEN logic trees per dimension)
     → signals/*_signal.py (macro, sentiment, ai_health calculators)
-      → signals/composite.py (weighted: AI 50%, Macro 30%, Sentiment 20% + AI veto)
+      → signals/composite.py (weighted: Macro 30%, Sentiment 30%, AI Health 40% + AI veto)
         → portfolio/sizing.py (4-phase: take-profit → signal exits → buys → redistribute)
           → notifications/console.py (Rich) | gui/components.py (NiceGUI)
 ```
@@ -32,9 +32,34 @@ data/*.py (yfinance, FRED, Gemini+EDGAR)
 - `src/rewired/agent/` — Gemini LLM integration (strict confinement: temp=0, JSON mode, retry), centralized prompts (`prompts.py`), per-company evaluator (`evaluator.py`)
 - `src/rewired/gui/` — NiceGUI dashboard (optional dependency)
 
+## Build And Test
+
+Use the project virtualenv when present. Canonical install, test, and run commands come from `pyproject.toml`, `cli.py`, and the existing pytest suite:
+
+```bash
+pip install -e .
+pip install -e ".[dev]"
+pip install -e ".[gui]"
+pip install -e ".[dev,gui,broker]"
+pytest tests/ -v
+rewired --help
+rewired signals
+rewired gui --port 8080
+```
+
+Prefer targeted regression checks around the subsystem you changed before running the full suite:
+
+```bash
+pytest tests/test_composite.py -v
+pytest tests/test_ai_health.py tests/test_fmp.py tests/test_gemini.py -v
+pytest tests/test_gui_app.py tests/test_prices.py -v
+```
+
+If you touch optional GUI code, install `.[gui]` first. If you touch broker execution paths, install `.[broker]` or `.[dev,gui,broker]`.
+
 ## Critical Conventions
 
-**All files must use** `from __future__ import annotations` and explicit `encoding="utf-8"` on every `open()` call. Windows GBK encoding breaks otherwise.
+**For new or edited Python modules**, prefer `from __future__ import annotations`. For any file I/O you add or modify, always pass `encoding="utf-8"` to `open()`. Windows GBK defaults break otherwise.
 
 **Never use the `€` symbol** in output strings. Use the `EUR` text constant from `console.py` instead:
 ```python
@@ -51,6 +76,13 @@ def signals():
 ```
 
 **Error handling pattern**: data fetchers catch broad `Exception`, return empty lists or safe defaults. Missing critical data triggers circuit breaker (defaults to ORANGE). Never let API failures crash the system.
+
+**Pattern anchors**:
+- `src/rewired/cli.py` — lazy-import CLI style and command inventory
+- `src/rewired/signals/composite.py` — canonical weighting and override logic
+- `src/rewired/data/ai_health.py` — CAPEX cache/schema handling and Gemini edge cases
+- `src/rewired/gui/state.py` — GUI cache plus non-blocking lock pattern
+- `src/rewired/gui/app.py` — NiceGUI render lifecycle constraints and Windows exception filtering
 
 ## Scoring Convention (Blueprint)
 
@@ -89,11 +121,18 @@ Signal evaluation uses **deterministic boolean rules** in `signals/rules.py`, NO
 
 ## Gemini Integration (Strict Confinement)
 
-All Gemini calls use `temperature=0.0` for deterministic output. Set `json_output=True` for structured responses with `response_mime_type="application/json"`. Auto-retry (max 2) with penalty prompt on malformed JSON. CAPEX analysis uses `search_grounding=True` for real-time data.
+All Gemini calls use `temperature=0.0` for deterministic output. Set `json_output=True` for structured responses with `response_mime_type="application/json"`. Auto-retry is deliberately conservative (`max_retries=1` by default in `agent/gemini.py`) to avoid quota burn.
+
+Important Gemini constraints:
+- Do not combine `json_output=True` with `search_grounding=True`; the API rejects tool use with JSON MIME output. The wrapper now disables grounding in that case.
+- Treat `429 RESOURCE_EXHAUSTED`, `504 DEADLINE_EXCEEDED`, and connection-reset errors as stop conditions, not reasons to keep cascading across models.
+- CAPEX analysis in `data/ai_health.py` is FMP-first; yfinance is fallback only.
+- CAPEX prompt/parser contract uses `capex_trend`; parser still accepts legacy `trend` for backward compatibility.
+- If CAPEX schema or parser semantics change, bump `_CAPEX_CACHE_VERSION` or stale `data/capex_cache.json` entries will persist.
 
 **Centralized Prompt Registry** — ALL Gemini prompt templates live in `agent/prompts.py`. Template variables use `str.format()` placeholders. Naming convention: `{DOMAIN}_{ACTION}` in UPPER_SNAKE_CASE. System instructions: `SYSTEM_ANALYST`, `SYSTEM_EVALUATOR`, `SYSTEM_REGIME`, `SYSTEM_CAPEX`.
 
-**Per-Company Evaluator** — `agent/evaluator.py` takes a `Stock`, gathers FMP financial data, and sends through Gemini with `COMPANY_EVALUATE` prompt to produce a `CompanyEvaluation` (Pydantic model). Supports single-stock and batch-universe evaluation. Default to conservative 5.0/10 scores on failure.
+**Per-Company Evaluator** — `agent/evaluator.py` takes a `Stock`, gathers FMP financial data, and sends through Gemini with `COMPANY_EVALUATE` prompt to produce a `CompanyEvaluation` (Pydantic model). Supports single-stock and batch-universe evaluation. Batch evaluation is intentionally throttled in small chunks and aborts remaining work early when rate-limit/timeout responses appear.
 
 ## FMP Data Pipeline
 
@@ -144,17 +183,27 @@ Add to `src/rewired/cli.py` using the `@main.command()` decorator. Use lazy impo
 
 NiceGUI is an optional dependency (`pip install -e ".[gui]"`). The dashboard uses `gui/state.py` (TTL-cached data fetching singleton) and `gui/components.py` (card-based UI builders). Blocking API calls must use `await _run_in_thread(fn)` to keep the UI responsive.
 
+Critical GUI constraints:
+- In `gui/app.py`, do all async fetching before entering `with container:` blocks. Do not `await` inside a NiceGUI slot context; it can detach the active parent and blank tabs.
+- Rebuild each tab independently so one rendering failure does not blank the whole dashboard.
+- Use `DashboardState` getters and caches; do not trigger expensive full-universe Gemini evaluation from background refresh paths.
+- `gui/state.py` uses per-source non-blocking locks to prevent duplicate fetch storms. Preserve that pattern when adding new cached sources.
+- On Windows, benign Proactor transport disconnect errors are intentionally filtered in the GUI exception handler. Do not remove that suppression unless you have a verified replacement.
+- For live ECharts updates, return raw JavaScript object literal strings where NiceGUI expects JS source; Python dicts can serialize incorrectly for `:setOption(...)` calls.
+
 ## Developer Commands
 
 ```bash
-pip install -e ".[dev,gui]"   # Install with all extras
+pip install -e ".[dev,gui,broker]"   # Install with all extras
 rewired --help                 # List all CLI commands
 rewired signals                # Live signal check (hits yfinance/FRED/Gemini)
 rewired pies                   # T212 Pies allocation table
 rewired evaluate --all         # Per-company Gemini evaluation (full universe)
 rewired evaluate -t NVDA       # Single-stock evaluation
 rewired resolve "nvidia"        # Ticker resolution
+rewired pipeline --dry-run     # End-to-end DAG without broker execution
+rewired rebalance --dry-run    # Universe tier rebalance preview
 rewired gui --port 8080        # Launch web dashboard
 ```
 
-No tests exist yet. Test infrastructure is pytest (`tests/` directory, `dev` dependency group).
+Test infrastructure is pytest in `tests/`. Prefer targeted test runs for the subsystem you changed before running the full suite.

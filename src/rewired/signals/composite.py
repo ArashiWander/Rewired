@@ -1,17 +1,22 @@
-"""Composite signal aggregation across all categories."""
+"""Composite signal aggregation — truth-table waterfall (no weighted averaging).
+
+Rules are evaluated top-to-bottom, most defensive first.  The first
+matching row determines the composite color.  AI Health RED is an
+absolute veto that overrides all other signals to RED.
+"""
 
 from __future__ import annotations
 
 from rewired.models.signals import (
     CategorySignal,
-    CompositeSignal,
     SignalCategory,
     SignalColor,
     SIGNAL_SCORES,
     score_to_color,
 )
 
-# Category weights in composite (must sum to 1.0)
+# Category weights retained for backward compat / GUI display only.
+# They are NOT used in the truth-table evaluation path.
 CATEGORY_WEIGHTS = {
     SignalCategory.MACRO: 0.30,
     SignalCategory.SENTIMENT: 0.30,
@@ -22,64 +27,101 @@ CATEGORY_WEIGHTS = {
 def compute_composite(
     categories: dict[SignalCategory, CategorySignal],
 ) -> tuple[SignalColor, bool, dict]:
-    """Compute overall signal color from category signals.
+    """Compute overall signal color via deterministic truth-table waterfall.
 
-    Uses weighted average with worst-of override:
-    - If any category is RED, composite cannot be better than ORANGE.
-    - If AI_HEALTH is RED, absolute veto → force RED.
+    Evaluation order (first match wins):
+      0. AI_HEALTH RED → global RED (absolute veto)
+      1. Any category RED → ORANGE floor (worst-of override)
+      2. AI_HEALTH ORANGE → composite cannot exceed ORANGE
+      3. MACRO RED or SENTIMENT RED → composite = ORANGE
+      4. All three GREEN → GREEN
+      5. ≥2 categories GREEN, no ORANGE or RED → GREEN
+      6. Any ORANGE present → YELLOW
+      7. Default → YELLOW
 
     Returns ``(color, veto_active, transparency)`` where *transparency*
-    contains the full calculation breakdown for the Glass-Box UI.
+    contains the full decision breakdown for the Glass-Box UI.
     """
     transparency: dict = {
-        "category_scores": {},
-        "weights": {k.value: v for k, v in CATEGORY_WEIGHTS.items()},
-        "weighted_terms": {},
-        "weighted_sum": 0.0,
-        "pre_override_color": "",
-        "override_applied": "none",
+        "category_colors": {},
+        "rule_matched": "",
+        "veto_active": False,
         "final_color": "",
     }
 
     if not categories:
+        transparency["rule_matched"] = "NO_DATA_DEFAULT_YELLOW"
         transparency["final_color"] = SignalColor.YELLOW.value
         return SignalColor.YELLOW, False, transparency
 
-    # Weighted score
-    total_weight = 0.0
-    weighted_score = 0.0
-    for cat, signal in categories.items():
-        w = CATEGORY_WEIGHTS.get(cat, 0.3)
-        cat_score = SIGNAL_SCORES[signal.composite_color]
-        weighted_score += cat_score * w
-        total_weight += w
-        transparency["category_scores"][cat.value] = {
-            "color": signal.composite_color.value,
-            "score": cat_score,
-        }
-        transparency["weighted_terms"][cat.value] = round(cat_score * w, 4)
+    # Extract per-category colors
+    macro_color = _cat_color(categories, SignalCategory.MACRO)
+    sentiment_color = _cat_color(categories, SignalCategory.SENTIMENT)
+    ai_color = _cat_color(categories, SignalCategory.AI_HEALTH)
 
-    if total_weight > 0:
-        weighted_score /= total_weight
+    transparency["category_colors"] = {
+        "macro": macro_color.value if macro_color else "missing",
+        "sentiment": sentiment_color.value if sentiment_color else "missing",
+        "ai_health": ai_color.value if ai_color else "missing",
+    }
 
-    transparency["weighted_sum"] = round(weighted_score, 4)
-    color = score_to_color(weighted_score)
-    transparency["pre_override_color"] = color.value
+    colors = [c for c in (macro_color, sentiment_color, ai_color) if c is not None]
 
-    # AI Health veto: if AI_HEALTH is RED → force overall RED
-    veto_active = False
-    ai_sig = categories.get(SignalCategory.AI_HEALTH)
-    if ai_sig and ai_sig.composite_color == SignalColor.RED:
-        veto_active = True
-        color = SignalColor.RED
-        transparency["override_applied"] = "ai_health_veto"
+    # ── Rule 0: AI Health VETO (absolute) ─────────────────────────────
+    if ai_color == SignalColor.RED:
+        transparency["veto_active"] = True
+        transparency["rule_matched"] = "AI_HEALTH_VETO_RED"
+        transparency["final_color"] = SignalColor.RED.value
+        return SignalColor.RED, True, transparency
 
-    # Worst-of override: if any other RED, composite is at most ORANGE
-    if not veto_active:
-        any_red = any(s.composite_color == SignalColor.RED for s in categories.values())
-        if any_red and color in (SignalColor.GREEN, SignalColor.YELLOW):
-            color = SignalColor.ORANGE
-            transparency["override_applied"] = "worst_of_orange"
+    # ── Rule 1: Any category RED → ORANGE floor ──────────────────────
+    if SignalColor.RED in colors:
+        transparency["rule_matched"] = "ANY_RED_FLOOR_ORANGE"
+        transparency["final_color"] = SignalColor.ORANGE.value
+        return SignalColor.ORANGE, False, transparency
 
-    transparency["final_color"] = color.value
-    return color, veto_active, transparency
+    # ── Rule 2: AI Health ORANGE → cap at ORANGE ─────────────────────
+    if ai_color == SignalColor.ORANGE:
+        transparency["rule_matched"] = "AI_HEALTH_ORANGE_CAP"
+        transparency["final_color"] = SignalColor.ORANGE.value
+        return SignalColor.ORANGE, False, transparency
+
+    # ── Rule 3: Two or more ORANGE → ORANGE ──────────────────────────
+    orange_count = colors.count(SignalColor.ORANGE)
+    if orange_count >= 2:
+        transparency["rule_matched"] = "MULTI_ORANGE_FLOOR"
+        transparency["final_color"] = SignalColor.ORANGE.value
+        return SignalColor.ORANGE, False, transparency
+
+    # ── Rule 4: All GREEN → GREEN ────────────────────────────────────
+    if all(c == SignalColor.GREEN for c in colors) and len(colors) == 3:
+        transparency["rule_matched"] = "ALL_GREEN"
+        transparency["final_color"] = SignalColor.GREEN.value
+        return SignalColor.GREEN, False, transparency
+
+    # ── Rule 5: ≥2 GREEN, no ORANGE/RED → GREEN ─────────────────────
+    green_count = colors.count(SignalColor.GREEN)
+    if green_count >= 2 and orange_count == 0:
+        transparency["rule_matched"] = "MAJORITY_GREEN"
+        transparency["final_color"] = SignalColor.GREEN.value
+        return SignalColor.GREEN, False, transparency
+
+    # ── Rule 6: Any single ORANGE → YELLOW ──────────────────────────
+    if orange_count >= 1:
+        transparency["rule_matched"] = "SINGLE_ORANGE_YELLOW"
+        transparency["final_color"] = SignalColor.YELLOW.value
+        return SignalColor.YELLOW, False, transparency
+
+    # ── Rule 7: Default → YELLOW ─────────────────────────────────────
+    transparency["rule_matched"] = "DEFAULT_YELLOW"
+    transparency["final_color"] = SignalColor.YELLOW.value
+    return SignalColor.YELLOW, False, transparency
+
+
+def _cat_color(
+    categories: dict[SignalCategory, CategorySignal],
+    cat: SignalCategory,
+) -> SignalColor | None:
+    """Extract color for a category, or None if missing."""
+    sig = categories.get(cat)
+    return sig.composite_color if sig else None

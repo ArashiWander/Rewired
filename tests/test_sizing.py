@@ -1,4 +1,9 @@
-"""Tests for position sizing: execution matrix actions per signal color."""
+"""Tests for 2D L×T constraint solver and position sizing.
+
+Tests cover the 5-phase allocation engine: cash floor, layer budgets,
+L4 dynamic residual, intra-layer tier distribution, and tolerance band.
+Also tests hedge protocols and suggestion generation.
+"""
 
 from __future__ import annotations
 
@@ -8,33 +13,50 @@ from unittest.mock import patch
 from rewired.models.signals import SignalColor
 from rewired.models.portfolio import Portfolio, Position
 from rewired.models.universe import Layer, Stock, Tier, Universe
-from rewired.portfolio.sizing import calculate_suggestions, calculate_pies_allocation
+from rewired.portfolio.sizing import (
+    _solve_lxt,
+    _eligible_tiers,
+    calculate_suggestions,
+    calculate_pies_allocation,
+    _HEDGE_TICKER,
+)
 from tests.conftest import make_composite
 
 
-# ── Shared helpers ───────────────────────────────────────────────────────
+# ── Shared config & fixtures ─────────────────────────────────────────────
 
-_SAMPLE_PORTFOLIO_CONFIG = {
-    "allocation_by_tier": {"T1": 0.40, "T2": 0.30, "T3": 0.20, "T4": 0.10},
-    "signal_multipliers": {"green": 1.0, "yellow": 0.85, "orange": 0.6, "red": 0.3},
+_LXT_CONFIG = {
+    "layer_budgets": {"L1": 0.175, "L2": 0.190, "L3": 0.250, "L5": 0.075},
+    "cash_floors": {"green": 0.00, "yellow": 0.05, "orange": 0.12, "red": 0.20},
+    "tier_ratios": {"T1": 0.500, "T2": 0.275, "T3": 0.100, "T4": 0.055},
     "constraints": {
-        "max_single_position_pct": 15,
-        "min_position_eur": 10,
+        "max_single_position_pct": 15.0,
+        "min_position_eur": 10.0,
         "max_positions": 15,
-    },
-    "tier_rules_by_signal": {
-        "green": {"T1": "hold", "T2": "hold", "T3": "hold", "T4": "hold"},
-        "yellow": {"T1": "hold", "T2": "hold", "T3": "hold", "T4": "trim_50"},
-        "orange": {"T1": "hold", "T2": "hold", "T3": "trim_50", "T4": "exit"},
-        "red": {"T1": "hold", "T2": "trim_50", "T3": "exit", "T4": "exit"},
     },
 }
 
 
 @pytest.fixture()
 def mock_portfolio_config():
-    with patch("rewired.portfolio.sizing._load_portfolio_config", return_value=_SAMPLE_PORTFOLIO_CONFIG):
+    with patch("rewired.portfolio.sizing._load_portfolio_config", return_value=_LXT_CONFIG):
         yield
+
+
+@pytest.fixture()
+def lxt_universe() -> Universe:
+    """Universe covering all 5 layers and multiple tiers."""
+    return Universe(stocks=[
+        Stock(ticker="NVDA", name="NVIDIA", layer=Layer.L1, tier=Tier.T1, max_weight_pct=15),
+        Stock(ticker="AVGO", name="Broadcom", layer=Layer.L1, tier=Tier.T2, max_weight_pct=10),
+        Stock(ticker="MSFT", name="Microsoft", layer=Layer.L2, tier=Tier.T1, max_weight_pct=12),
+        Stock(ticker="AMZN", name="Amazon", layer=Layer.L2, tier=Tier.T2, max_weight_pct=10),
+        Stock(ticker="GOOGL", name="Alphabet", layer=Layer.L3, tier=Tier.T1, max_weight_pct=12),
+        Stock(ticker="META", name="Meta", layer=Layer.L3, tier=Tier.T2, max_weight_pct=10),
+        Stock(ticker="PLTR", name="Palantir", layer=Layer.L4, tier=Tier.T3, max_weight_pct=5),
+        Stock(ticker="SNOW", name="Snowflake", layer=Layer.L4, tier=Tier.T2, max_weight_pct=6),
+        Stock(ticker="IONQ", name="IonQ", layer=Layer.L5, tier=Tier.T4, max_weight_pct=3),
+    ])
 
 
 @pytest.fixture()
@@ -60,7 +82,7 @@ def invested_portfolio() -> Portfolio:
                 avg_cost_eur=120.0,
                 current_price_eur=140.0,
                 market_value_eur=700.0,
-                weight_pct=22.6,  # over 15% cap
+                weight_pct=22.6,
             ),
             "PLTR": Position(
                 ticker="PLTR",
@@ -83,106 +105,198 @@ def invested_portfolio() -> Portfolio:
 
 
 # ═════════════════════════════════════════════════════════════════════════
-# PHASE 1: TAKE PROFIT
+# PHASE 1: CASH FLOOR
 # ═════════════════════════════════════════════════════════════════════════
 
 
-class TestTakeProfit:
-    """Take-profit sells work in ALL signal colors."""
+class TestCashFloor:
+    """Cash floor varies by regime color."""
 
-    def test_overweight_triggers_sell(self, mock_portfolio_config, invested_portfolio, small_universe):
-        """NVDA at 22.6% > 15% cap → take-profit SELL."""
+    def test_green_zero_cash_floor(self, lxt_universe):
+        """GREEN cash floor is 0% — all capital is investable (subject to tier ratios)."""
+        targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.GREEN, 10000.0)
+        stock_total = sum(v for k, v in targets.items() if k != _HEDGE_TICKER)
+        # Tier ratios sum to 93% (7% structural buffer) and max_weight caps
+        # may further reduce allocation; but allocated total should be >50%
+        assert stock_total > 5000.0
+        assert stock_total <= 10000.0
+
+    def test_yellow_5pct_cash(self, lxt_universe):
+        targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.YELLOW, 10000.0)
+        stock_total = sum(v for k, v in targets.items() if k != _HEDGE_TICKER)
+        assert stock_total <= 9500.0 + 10  # 95% invested
+
+    def test_orange_12pct_cash(self, lxt_universe):
+        targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.ORANGE, 10000.0)
+        stock_total = sum(v for k, v in targets.items() if k != _HEDGE_TICKER)
+        # ORANGE also deploys 6% into hedge, so stock total should be ≤ 82%
+        assert stock_total <= 8800.0 + 10
+
+    def test_red_20pct_cash(self, lxt_universe):
+        targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.RED, 10000.0)
+        stock_total = sum(v for k, v in targets.items() if k != _HEDGE_TICKER)
+        assert stock_total <= 8000.0 + 10
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# PHASE 2+3: LAYER BUDGETS AND L4 RESIDUAL
+# ═════════════════════════════════════════════════════════════════════════
+
+
+class TestLayerBudgets:
+    """Static layer budget allocation and L4 dynamic residual."""
+
+    def test_l5_zero_under_red(self, lxt_universe):
+        """RED regime → L5 budget is zeroed out (crisis liquidation)."""
+        targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.RED, 10000.0)
+        ionq_target = targets.get("IONQ", 0.0)
+        assert ionq_target == 0.0
+
+    def test_l4_residual_positive_green(self, lxt_universe):
+        """GREEN: L4 = investable - (L1+L2+L3+L5) should be positive."""
+        total = 10000.0
+        # L1=17.5%, L2=19%, L3=25%, L5=7.5% = 69% → L4 = 31%
+        targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.GREEN, total)
+        l4_stocks = [s for s in lxt_universe.stocks if s.layer == Layer.L4]
+        l4_total = sum(targets.get(s.ticker, 0.0) for s in l4_stocks)
+        assert l4_total > 0
+
+
+class TestDeficitSafeguard:
+    """When L4 would go negative, proportional reduction kicks in."""
+
+    def test_deficit_clamps_l4_to_zero(self):
+        """If layer budgets exceed investable, L4 = 0 (not negative)."""
+        extreme_config = {
+            "layer_budgets": {"L1": 0.40, "L2": 0.40, "L3": 0.20, "L5": 0.10},
+            "cash_floors": {"red": 0.20},
+            "tier_ratios": {"T1": 1.0},
+            "constraints": {"max_single_position_pct": 100.0},
+        }
+        universe = Universe(stocks=[
+            Stock(ticker="A", name="A", layer=Layer.L1, tier=Tier.T1, max_weight_pct=100),
+            Stock(ticker="B", name="B", layer=Layer.L2, tier=Tier.T1, max_weight_pct=100),
+            Stock(ticker="C", name="C", layer=Layer.L3, tier=Tier.T1, max_weight_pct=100),
+            Stock(ticker="D", name="D", layer=Layer.L4, tier=Tier.T1, max_weight_pct=100),
+            Stock(ticker="E", name="E", layer=Layer.L5, tier=Tier.T1, max_weight_pct=100),
+        ])
+        # RED: cash=20%, static layers = 110% > 80% investable → deficit
+        targets = _solve_lxt(extreme_config, universe, SignalColor.RED, 10000.0)
+        d_target = targets.get("D", 0.0)
+        assert d_target == 0.0
+        # All targets should be >= 0
+        for v in targets.values():
+            assert v >= 0.0
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# PHASE 4: ELIGIBILITY FILTER
+# ═════════════════════════════════════════════════════════════════════════
+
+
+class TestEligibilityFilter:
+    """Tier eligibility varies by regime."""
+
+    def test_green_all_tiers(self):
+        assert _eligible_tiers(SignalColor.GREEN) == {Tier.T1, Tier.T2, Tier.T3, Tier.T4}
+
+    def test_yellow_all_tiers(self):
+        assert _eligible_tiers(SignalColor.YELLOW) == {Tier.T1, Tier.T2, Tier.T3, Tier.T4}
+
+    def test_orange_t1_t2_only(self):
+        assert _eligible_tiers(SignalColor.ORANGE) == {Tier.T1, Tier.T2}
+
+    def test_red_t1_t2_only(self):
+        assert _eligible_tiers(SignalColor.RED) == {Tier.T1, Tier.T2}
+
+    def test_orange_zeros_t3_t4(self, lxt_universe):
+        """Under ORANGE, T3/T4 stocks should get 0 target."""
+        targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.ORANGE, 10000.0)
+        pltr_target = targets.get("PLTR", 0.0)  # L4/T3
+        ionq_target = targets.get("IONQ", 0.0)  # L5/T4
+        assert pltr_target == 0.0
+        assert ionq_target == 0.0
+
+    def test_red_zeros_t3_t4(self, lxt_universe):
+        """Under RED, T3/T4 stocks should get 0 target."""
+        targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.RED, 10000.0)
+        pltr_target = targets.get("PLTR", 0.0)
+        ionq_target = targets.get("IONQ", 0.0)
+        assert pltr_target == 0.0
+        assert ionq_target == 0.0
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# HEDGE PROTOCOLS
+# ═════════════════════════════════════════════════════════════════════════
+
+
+class TestHedgeProtocol:
+    """QQQS.L hedge deployment and unwind."""
+
+    def test_orange_deploys_hedge(self, lxt_universe):
+        """ORANGE → 6% into QQQS.L."""
+        targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.ORANGE, 10000.0)
+        assert targets[_HEDGE_TICKER] == pytest.approx(600.0, abs=1)
+
+    def test_red_no_hedge(self, lxt_universe):
+        """RED = full liquidation mode → 0% hedge."""
+        targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.RED, 10000.0)
+        assert targets[_HEDGE_TICKER] == 0.0
+
+    def test_green_no_hedge(self, lxt_universe):
+        """GREEN → hedge unwound / not deployed."""
+        targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.GREEN, 10000.0)
+        assert targets[_HEDGE_TICKER] == 0.0
+
+    def test_yellow_no_hedge(self, lxt_universe):
+        """YELLOW → hedge unwound / not deployed."""
+        targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.YELLOW, 10000.0)
+        assert targets[_HEDGE_TICKER] == 0.0
+
+    def test_hedge_unwind_sells(self, mock_portfolio_config, small_universe):
+        """When regime upgrades to GREEN with an existing hedge, generate sell for QQQS.L."""
+        pf = Portfolio(
+            total_capital_eur=3100.0,
+            cash_eur=1000.0,
+            positions={
+                _HEDGE_TICKER: Position(
+                    ticker=_HEDGE_TICKER,
+                    shares=10.0,
+                    avg_cost_eur=20.0,
+                    current_price_eur=20.0,
+                    market_value_eur=200.0,
+                    weight_pct=6.5,
+                ),
+            },
+        )
         sig = make_composite(overall=SignalColor.GREEN)
-        suggestions = calculate_suggestions(invested_portfolio, small_universe, sig)
+        suggestions = calculate_suggestions(pf, small_universe, sig)
 
-        tp_sells = [s for s in suggestions if s["priority"] == 1]
-        assert any(s["ticker"] == "NVDA" for s in tp_sells)
-        nvda_sell = next(s for s in tp_sells if s["ticker"] == "NVDA")
-        assert nvda_sell["action"] == "SELL"
-        assert nvda_sell["amount_eur"] > 0
-
-    def test_take_profit_works_in_red(self, mock_portfolio_config, invested_portfolio, small_universe):
-        """Take-profit fires even under RED signal."""
-        sig = make_composite(overall=SignalColor.RED)
-        suggestions = calculate_suggestions(invested_portfolio, small_universe, sig)
-
-        tp_sells = [s for s in suggestions if s["priority"] == 1]
-        nvda_sells = [s for s in tp_sells if s["ticker"] == "NVDA"]
-        assert len(nvda_sells) == 1
+        hedge_sells = [s for s in suggestions if s["ticker"] == _HEDGE_TICKER and s["action"] == "SELL"]
+        assert len(hedge_sells) == 1
+        assert hedge_sells[0]["amount_eur"] > 0
 
 
 # ═════════════════════════════════════════════════════════════════════════
-# PHASE 2: SIGNAL-DRIVEN EXITS
+# SUGGESTIONS AND PIES
 # ═════════════════════════════════════════════════════════════════════════
 
 
-class TestSignalExits:
-    """Tier rules trigger exits and trims based on signal color."""
-
-    def test_red_exits_t4(self, mock_portfolio_config, invested_portfolio, small_universe):
-        """RED signal → T4 exit (IONQ should be sold)."""
-        sig = make_composite(overall=SignalColor.RED)
-        suggestions = calculate_suggestions(invested_portfolio, small_universe, sig)
-
-        ionq_sells = [s for s in suggestions if s["ticker"] == "IONQ" and s["action"] == "SELL"]
-        assert len(ionq_sells) >= 1
-
-    def test_red_exits_t3(self, mock_portfolio_config, invested_portfolio, small_universe):
-        """RED signal → T3 exit (PLTR should be sold)."""
-        sig = make_composite(overall=SignalColor.RED)
-        suggestions = calculate_suggestions(invested_portfolio, small_universe, sig)
-
-        pltr_sells = [s for s in suggestions if s["ticker"] == "PLTR" and s["action"] == "SELL"]
-        assert len(pltr_sells) >= 1
-
-    def test_orange_exits_t4(self, mock_portfolio_config, invested_portfolio, small_universe):
-        """ORANGE signal → T4 exit."""
-        sig = make_composite(overall=SignalColor.ORANGE)
-        suggestions = calculate_suggestions(invested_portfolio, small_universe, sig)
-
-        ionq_sells = [s for s in suggestions if s["ticker"] == "IONQ" and s["action"] == "SELL"]
-        assert len(ionq_sells) >= 1
-
-    def test_orange_trims_t3(self, mock_portfolio_config, invested_portfolio, small_universe):
-        """ORANGE signal → T3 trim 50%."""
-        sig = make_composite(overall=SignalColor.ORANGE)
-        suggestions = calculate_suggestions(invested_portfolio, small_universe, sig)
-
-        pltr_sells = [s for s in suggestions if s["ticker"] == "PLTR" and s["action"] == "SELL"]
-        if pltr_sells:
-            # Should be a trim (not full exit), so amount < full position
-            assert pltr_sells[0]["amount_eur"] < 300.0
-
-    def test_green_no_signal_exits(self, mock_portfolio_config, invested_portfolio, small_universe):
-        """GREEN signal → no signal-driven exits (phase 2 is empty)."""
-        sig = make_composite(overall=SignalColor.GREEN)
-        suggestions = calculate_suggestions(invested_portfolio, small_universe, sig)
-
-        phase2 = [s for s in suggestions if s["priority"] == 2]
-        assert len(phase2) == 0
-
-
-# ═════════════════════════════════════════════════════════════════════════
-# PHASE 3: BUY TARGETS
-# ═════════════════════════════════════════════════════════════════════════
-
-
-class TestBuyTargets:
-    """New positions for unheld stocks."""
+class TestSuggestions:
+    """Suggestion generation from solver targets."""
 
     def test_green_generates_buys(self, mock_portfolio_config, small_universe):
-        """GREEN signal + cash → buy suggestions for unheld stocks."""
+        """GREEN + cash → buy suggestions."""
         pf = Portfolio(total_capital_eur=3100.0, cash_eur=3100.0)
         sig = make_composite(overall=SignalColor.GREEN)
         suggestions = calculate_suggestions(pf, small_universe, sig)
 
         buys = [s for s in suggestions if s["action"] == "BUY"]
         assert len(buys) > 0
-        tickers = [s["ticker"] for s in buys]
-        assert "NVDA" in tickers or "MSFT" in tickers
 
     def test_red_no_new_t4_buys(self, mock_portfolio_config, small_universe):
-        """RED signal → should NOT buy T4 stocks (exit rule)."""
+        """RED signal → should NOT buy T4 stocks."""
         pf = Portfolio(total_capital_eur=3100.0, cash_eur=3100.0)
         sig = make_composite(overall=SignalColor.RED)
         suggestions = calculate_suggestions(pf, small_universe, sig)
@@ -190,33 +304,27 @@ class TestBuyTargets:
         t4_buys = [s for s in suggestions if s["ticker"] == "IONQ" and s["action"] == "BUY"]
         assert len(t4_buys) == 0
 
-    def test_no_buys_below_minimum(self, mock_portfolio_config, small_universe):
-        """Should not generate buy suggestions below min_position_eur (10)."""
-        pf = Portfolio(total_capital_eur=3100.0, cash_eur=3100.0)
-        sig = make_composite(overall=SignalColor.GREEN)
-        suggestions = calculate_suggestions(pf, small_universe, sig)
+    def test_red_exits_t3_t4(self, mock_portfolio_config, invested_portfolio, small_universe):
+        """RED → T3/T4 positions should be sold."""
+        sig = make_composite(overall=SignalColor.RED)
+        suggestions = calculate_suggestions(invested_portfolio, small_universe, sig)
 
-        for s in suggestions:
-            if s["action"] == "BUY":
-                assert s["amount_eur"] >= 10
+        ionq_sells = [s for s in suggestions if s["ticker"] == "IONQ" and s["action"] == "SELL"]
+        pltr_sells = [s for s in suggestions if s["ticker"] == "PLTR" and s["action"] == "SELL"]
+        assert len(ionq_sells) >= 1
+        assert len(pltr_sells) >= 1
 
+    def test_priority_ordering(self, mock_portfolio_config, invested_portfolio, small_universe):
+        """Lower priority number = first in list."""
+        sig = make_composite(overall=SignalColor.RED)
+        suggestions = calculate_suggestions(invested_portfolio, small_universe, sig)
 
-# ═════════════════════════════════════════════════════════════════════════
-# PIES ALLOCATION
-# ═════════════════════════════════════════════════════════════════════════
+        priorities = [s.get("priority", 99) for s in suggestions]
+        assert priorities == sorted(priorities)
 
 
 class TestPiesAllocation:
     """Trading 212 Pies allocation output."""
-
-    def test_allocations_sum_to_100(self, mock_portfolio_config, small_universe):
-        """All target percentages must sum to ~100%."""
-        pf = Portfolio(total_capital_eur=3100.0, cash_eur=3100.0)
-        sig = make_composite(overall=SignalColor.GREEN)
-        allocs = calculate_pies_allocation(pf, small_universe, sig)
-
-        total = sum(a["target_pct"] for a in allocs)
-        assert abs(total - 100.0) < 1.0  # within 1% due to rounding
 
     def test_cash_slice_exists(self, mock_portfolio_config, small_universe):
         """Allocation always includes a CASH entry."""
@@ -236,33 +344,16 @@ class TestPiesAllocation:
         ionq_alloc = [a for a in allocs if a["ticker"] == "IONQ"]
         assert ionq_alloc[0]["target_pct"] == 0.0
 
-    def test_multiplier_reduces_allocation(self, mock_portfolio_config, small_universe):
-        """Lower signal → lower multiplier → more cash."""
+    def test_green_invests_more_than_red(self, mock_portfolio_config, small_universe):
+        """GREEN → more equity allocation than RED."""
         pf = Portfolio(total_capital_eur=3100.0, cash_eur=3100.0)
 
         green_sig = make_composite(overall=SignalColor.GREEN)
         green_allocs = calculate_pies_allocation(pf, small_universe, green_sig)
         green_invested = sum(a["target_pct"] for a in green_allocs if a["ticker"] != "CASH")
 
-        yellow_sig = make_composite(overall=SignalColor.YELLOW)
-        yellow_allocs = calculate_pies_allocation(pf, small_universe, yellow_sig)
-        yellow_invested = sum(a["target_pct"] for a in yellow_allocs if a["ticker"] != "CASH")
+        red_sig = make_composite(overall=SignalColor.RED)
+        red_allocs = calculate_pies_allocation(pf, small_universe, red_sig)
+        red_invested = sum(a["target_pct"] for a in red_allocs if a["ticker"] != "CASH")
 
-        assert green_invested >= yellow_invested
-
-
-# ═════════════════════════════════════════════════════════════════════════
-# SUGGESTION ORDERING
-# ═════════════════════════════════════════════════════════════════════════
-
-
-class TestSuggestionOrdering:
-    """Suggestions should be sorted by priority."""
-
-    def test_priority_ordering(self, mock_portfolio_config, invested_portfolio, small_universe):
-        """Lower priority number = first in list."""
-        sig = make_composite(overall=SignalColor.RED)
-        suggestions = calculate_suggestions(invested_portfolio, small_universe, sig)
-
-        priorities = [s.get("priority", 99) for s in suggestions]
-        assert priorities == sorted(priorities)
+        assert green_invested > red_invested

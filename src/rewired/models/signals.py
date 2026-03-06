@@ -94,3 +94,72 @@ class CompositeSignal(BaseModel):
     summary: str
     veto_active: bool = False
     composite_transparency: dict = {}
+
+
+# ── Signal color ordering (for hysteresis comparisons) ───────────────────
+
+_COLOR_RANK: dict[SignalColor, int] = {
+    SignalColor.RED: 0,
+    SignalColor.ORANGE: 1,
+    SignalColor.YELLOW: 2,
+    SignalColor.GREEN: 3,
+}
+
+
+def color_is_better(a: SignalColor, b: SignalColor) -> bool:
+    """Return True if *a* is strictly better (less defensive) than *b*."""
+    return _COLOR_RANK[a] > _COLOR_RANK[b]
+
+
+def color_is_worse(a: SignalColor, b: SignalColor) -> bool:
+    """Return True if *a* is strictly worse (more defensive) than *b*."""
+    return _COLOR_RANK[a] < _COLOR_RANK[b]
+
+
+# ── LLM CAPEX extraction (strict Pydantic confinement) ──────────────────
+
+from pydantic import Field  # noqa: E402 (grouped import)
+
+
+class CompanyCapexData(BaseModel):
+    """Strict schema for per-company CAPEX data extracted by LLM."""
+    capex_absolute_bn: float = Field(
+        ..., description="Absolute CapEx in billions USD. Must be a pure float.",
+    )
+    qoq_growth_pct: float = Field(
+        ..., description="Quarter over Quarter growth percentage. E.g., 5.4",
+    )
+    yoy_growth_pct: float = Field(
+        ..., description="Year over Year growth percentage. E.g., 22.1",
+    )
+    explicit_guidance_cut_mentioned: bool = Field(
+        ...,
+        description=(
+            "True ONLY if management explicitly stated future infrastructure "
+            "spend reduction. False if they are just 'optimizing'."
+        ),
+    )
+    exact_capex_quote: str = Field(
+        ..., description="Verbatim management quote regarding CapEx. Max 2 sentences.",
+    )
+
+
+class AIHealthExtraction(BaseModel):
+    """Validated Gemini response for Big-4 CAPEX extraction."""
+    MSFT: CompanyCapexData
+    GOOGL: CompanyCapexData
+    AMZN: CompanyCapexData
+    META: CompanyCapexData
+
+
+# ── Regime state persistence (hysteresis) ────────────────────────────────
+
+from datetime import date as _date  # noqa: E402
+
+
+class RegimeState(BaseModel):
+    """Persisted in data/regime_state.json for 3-day hysteresis."""
+    current_regime: SignalColor = SignalColor.YELLOW
+    pending_upgrade: SignalColor | None = None
+    consecutive_days: int = 0
+    last_updated: _date = _date(1970, 1, 1)

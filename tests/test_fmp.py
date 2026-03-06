@@ -6,6 +6,7 @@ import json
 from unittest.mock import patch, MagicMock
 
 import pytest
+import requests
 
 from rewired.data import fmp
 
@@ -135,3 +136,40 @@ class TestCapexHelpers:
         result = fmp.get_capex_history("MSFT", limit=2)
         assert len(result) == 2
         assert result[0]["capex"] == 15000000000
+
+    @patch("rewired.data.fmp.is_configured", return_value=True)
+    @patch("rewired.data.fmp.requests.get")
+    def test_get_cash_flow_quarterly_falls_back_to_limit_four(self, mock_get, _):
+        mock_get.side_effect = [
+            _mock_response([]),
+            _mock_response([
+                {"date": "2025-12-31", "capitalExpenditure": -15000000000},
+                {"date": "2025-09-30", "capitalExpenditure": -12000000000},
+            ]),
+        ]
+
+        result = fmp.get_cash_flow("MSFT", period="quarter", limit=8)
+        import requests
+
+        assert len(result) == 2
+        assert mock_get.call_args_list[0].kwargs["params"]["limit"] == 8
+        assert mock_get.call_args_list[1].kwargs["params"]["limit"] == 4
+
+    @patch("rewired.data.fmp.is_configured", return_value=True)
+    @patch("rewired.data.fmp.requests.get")
+    def test_get_cash_flow_quarterly_402_falls_back_to_limit_four(self, mock_get, _):
+        premium_gate = requests.HTTPError("402 Client Error")
+        premium_gate.response = _mock_response([], status=402)
+        mock_get.side_effect = [
+            premium_gate,
+            _mock_response([
+                {"date": "2025-12-31", "capitalExpenditure": -15000000000},
+                {"date": "2025-09-30", "capitalExpenditure": -12000000000},
+            ]),
+        ]
+
+        result = fmp.get_cash_flow("MSFT", period="quarter", limit=8)
+
+        assert len(result) == 2
+        assert mock_get.call_args_list[0].kwargs["params"]["limit"] == 8
+        assert mock_get.call_args_list[1].kwargs["params"]["limit"] == 4

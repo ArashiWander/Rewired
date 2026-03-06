@@ -118,3 +118,21 @@ class TestNoResponseHandling:
         with patch("google.genai.Client", return_value=mock_client):
             result = gemini.generate("test")
             assert "No response" in result
+
+
+class TestNetworkErrors:
+    """Test handling of connection-reset style failures."""
+
+    @patch.dict("os.environ", {"GEMINI_API_KEY": "test_key"})
+    @patch("rewired.agent.gemini._candidate_models", return_value=["gemini-pro"])
+    def test_connection_reset_returns_network_error(self, _):
+        mock_client = MagicMock()
+        mock_client.models.generate_content.side_effect = ConnectionResetError(
+            "[WinError 10054] existing connection was forcibly closed"
+        )
+
+        with patch("google.genai.Client", return_value=mock_client):
+            result = gemini.generate("test")
+
+        assert "network error" in result.lower()
+        assert "connection reset" in result.lower()

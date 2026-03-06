@@ -2,11 +2,17 @@
 
 Includes DataStatus tracking so the UI can surface errors and stale-data
 warnings instead of silently swallowing failures.
+
+Each public ``get_*`` method uses a non-blocking lock so that only one
+thread fetches a given data source at a time.  If a fetch is already in
+progress, callers immediately receive the (possibly stale) cached value
+instead of spawning a duplicate API call chain.
 """
 
 from __future__ import annotations
 
 import json
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -16,10 +22,10 @@ from rewired import get_data_dir
 _SIGNAL_TTL = 300       # 5 minutes
 _PORTFOLIO_TTL = 120    # 2 minutes
 _PIES_TTL = 300         # 5 minutes
-_EVAL_TTL = 600         # 10 minutes (Gemini calls are expensive)
 
 
 _HEATMAP_TTL = 60      # 1 minute — fast enough for live heatmap refresh
+_REGIME_TTL = 120      # 2 minutes — regime state from JSON file
 
 
 @dataclass
@@ -56,38 +62,58 @@ class DataStatus:
 
 @dataclass
 class DashboardState:
-    """Holds cached dashboard data with TTL-based refresh and error tracking."""
+    """Holds cached dashboard data with TTL-based refresh and error tracking.
+
+    Each ``get_*`` method acquires a per-source non-blocking lock before
+    fetching.  If a fetch is already in progress the caller receives the
+    (possibly stale) cached value immediately, preventing duplicate API
+    call chains that saturate thread pools and produce the "fetching data
+    endlessly" symptom.
+    """
 
     _signal_cache: object = field(default=None, repr=False)
     _signal_ts: float = 0
     _signal_status: DataStatus = field(default_factory=DataStatus)
+    _signal_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     _portfolio_cache: object = field(default=None, repr=False)
     _portfolio_ts: float = 0
     _portfolio_status: DataStatus = field(default_factory=DataStatus)
+    _portfolio_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     _pies_cache: list = field(default_factory=list, repr=False)
     _pies_ts: float = 0
     _pies_status: DataStatus = field(default_factory=DataStatus)
+    _pies_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     _suggestions_cache: list = field(default_factory=list, repr=False)
     _suggestions_ts: float = 0
     _suggestions_status: DataStatus = field(default_factory=DataStatus)
+    _suggestions_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     _universe_cache: object = field(default=None, repr=False)
     _universe_status: DataStatus = field(default_factory=DataStatus)
-
-    _evaluation_cache: object = field(default=None, repr=False)
-    _evaluation_ts: float = 0
-    _evaluation_status: DataStatus = field(default_factory=DataStatus)
+    _universe_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     _heatmap_cache: dict = field(default_factory=dict, repr=False)
     _heatmap_ts: float = 0
     _heatmap_status: DataStatus = field(default_factory=DataStatus)
+    _heatmap_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
+    _regime_cache: object = field(default=None, repr=False)
+    _regime_ts: float = 0
+    _regime_status: DataStatus = field(default_factory=DataStatus)
+    _regime_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def get_signals(self):
-        """Get signals, refreshing if stale."""
+        """Get signals, refreshing if stale.
+
+        Uses a non-blocking lock so concurrent callers return the cached
+        value instead of spawning duplicate ``compute_signals()`` chains.
+        """
         if self._signal_cache and (time.time() - self._signal_ts < _SIGNAL_TTL):
+            return self._signal_cache
+        if not self._signal_lock.acquire(blocking=False):
             return self._signal_cache
         try:
             from rewired.signals.engine import compute_signals
@@ -96,11 +122,15 @@ class DashboardState:
             self._signal_status.mark_success()
         except Exception as e:
             self._signal_status.mark_error(str(e))
+        finally:
+            self._signal_lock.release()
         return self._signal_cache
 
     def get_portfolio(self):
         """Get portfolio with refreshed prices."""
         if self._portfolio_cache and (time.time() - self._portfolio_ts < _PORTFOLIO_TTL):
+            return self._portfolio_cache
+        if not self._portfolio_lock.acquire(blocking=False):
             return self._portfolio_cache
         try:
             from rewired.portfolio.manager import load_portfolio, refresh_prices
@@ -112,11 +142,15 @@ class DashboardState:
             self._portfolio_status.mark_success()
         except Exception as e:
             self._portfolio_status.mark_error(str(e))
+        finally:
+            self._portfolio_lock.release()
         return self._portfolio_cache
 
     def get_pies(self) -> list[dict]:
         """Get Pies allocation."""
         if self._pies_cache and (time.time() - self._pies_ts < _PIES_TTL):
+            return self._pies_cache
+        if not self._pies_lock.acquire(blocking=False):
             return self._pies_cache
         try:
             from rewired.portfolio.sizing import calculate_pies_allocation
@@ -129,11 +163,15 @@ class DashboardState:
                 self._pies_status.mark_success()
         except Exception as e:
             self._pies_status.mark_error(str(e))
+        finally:
+            self._pies_lock.release()
         return self._pies_cache
 
     def get_suggestions(self) -> list[dict]:
         """Get sizing suggestions."""
         if self._suggestions_cache and (time.time() - self._suggestions_ts < _PIES_TTL):
+            return self._suggestions_cache
+        if not self._suggestions_lock.acquire(blocking=False):
             return self._suggestions_cache
         try:
             from rewired.portfolio.sizing import calculate_suggestions
@@ -146,6 +184,8 @@ class DashboardState:
                 self._suggestions_status.mark_success()
         except Exception as e:
             self._suggestions_status.mark_error(str(e))
+        finally:
+            self._suggestions_lock.release()
         return self._suggestions_cache
 
     def get_signal_history(self) -> list[dict]:
@@ -163,26 +203,17 @@ class DashboardState:
         """Get the stock universe (static, cached permanently)."""
         if self._universe_cache is not None:
             return self._universe_cache
+        if not self._universe_lock.acquire(blocking=False):
+            return self._universe_cache
         try:
             from rewired.models.universe import load_universe
             self._universe_cache = load_universe()
             self._universe_status.mark_success()
         except Exception as e:
             self._universe_status.mark_error(str(e))
+        finally:
+            self._universe_lock.release()
         return self._universe_cache
-
-    def get_evaluations(self):
-        """Get cached evaluation batch, refreshing if stale."""
-        if self._evaluation_cache and (time.time() - self._evaluation_ts < _EVAL_TTL):
-            return self._evaluation_cache
-        try:
-            from rewired.agent.evaluator import evaluate_universe
-            self._evaluation_cache = evaluate_universe()
-            self._evaluation_ts = time.time()
-            self._evaluation_status.mark_success()
-        except Exception as e:
-            self._evaluation_status.mark_error(str(e))
-        return self._evaluation_cache
 
     def get_heatmap_data(self) -> dict:
         """Get enriched heatmap data: prices, portfolio values, daily changes.
@@ -192,6 +223,8 @@ class DashboardState:
         daily_change_pct, max_weight_pct.
         """
         if self._heatmap_cache and (time.time() - self._heatmap_ts < _HEATMAP_TTL):
+            return self._heatmap_cache
+        if not self._heatmap_lock.acquire(blocking=False):
             return self._heatmap_cache
         try:
             uni = self.get_universe()
@@ -224,6 +257,8 @@ class DashboardState:
             self._heatmap_status.mark_success()
         except Exception as e:
             self._heatmap_status.mark_error(str(e))
+        finally:
+            self._heatmap_lock.release()
         return self._heatmap_cache
 
     def get_all_statuses(self) -> dict[str, DataStatus]:
@@ -234,9 +269,33 @@ class DashboardState:
             "Pies": self._pies_status,
             "Suggestions": self._suggestions_status,
             "Universe": self._universe_status,
-            "Evaluation": self._evaluation_status,
             "Heatmap": self._heatmap_status,
+            "Regime": self._regime_status,
         }
+
+    def get_regime_state(self):
+        """Get the current regime state (hysteresis) from disk cache.
+
+        Returns a RegimeState instance or None.
+        """
+        if self._regime_cache and (time.time() - self._regime_ts < _REGIME_TTL):
+            return self._regime_cache
+        if not self._regime_lock.acquire(blocking=False):
+            return self._regime_cache
+        try:
+            regime_path = get_data_dir() / "regime_state.json"
+            if regime_path.exists():
+                with open(regime_path, encoding="utf-8") as f:
+                    data = json.load(f)
+                from rewired.models.signals import RegimeState
+                self._regime_cache = RegimeState.model_validate(data)
+            self._regime_ts = time.time()
+            self._regime_status.mark_success()
+        except Exception as e:
+            self._regime_status.mark_error(str(e))
+        finally:
+            self._regime_lock.release()
+        return self._regime_cache
 
     def refresh_all(self) -> None:
         """Force refresh all caches by resetting timestamps."""
@@ -246,6 +305,25 @@ class DashboardState:
         self._suggestions_ts = 0
         self._heatmap_ts = 0
         self._universe_cache = None
+
+    def refresh_portfolio_related(self) -> None:
+        """Invalidate portfolio, pies, suggestions, and heatmap.
+
+        Use after trade recording, capital adjustments, or transaction
+        deletes — operations that change the portfolio but NOT the
+        macro/sentiment/AI-health signals.
+        """
+        self._portfolio_ts = 0
+        self._pies_ts = 0
+        self._suggestions_ts = 0
+        self._heatmap_ts = 0
+
+    def refresh_universe_related(self) -> None:
+        """Invalidate universe and everything that depends on it."""
+        self._universe_cache = None
+        self._pies_ts = 0
+        self._suggestions_ts = 0
+        self._heatmap_ts = 0
 
 
 # Singleton instance

@@ -1,0 +1,30 @@
+[
+  {
+    "quarter": "2026-Q1",
+    "timestamp": "2026-03-06T15:30:11.308534",
+    "MSFT": {
+      "qoq_growth_pct": 2.4,
+      "yoy_growth_pct": 0.0,
+      "capex_absolute_bn": 17.1,
+      "explicit_guidance_cut_mentioned": false
+    },
+    "GOOGL": {
+      "qoq_growth_pct": 16.25,
+      "yoy_growth_pct": 0.0,
+      "capex_absolute_bn": 27.9,
+      "explicit_guidance_cut_mentioned": false
+    },
+    "AMZN": {
+      "qoq_growth_pct": 12.54,
+      "yoy_growth_pct": 0.0,
+      "capex_absolute_bn": 39.5,
+      "explicit_guidance_cut_mentioned": false
+    },
+    "META": {
+      "qoq_growth_pct": 13.83,
+      "yoy_growth_pct": 0.0,
+      "capex_absolute_bn": 21.4,
+      "explicit_guidance_cut_mentioned": false
+    }
+  }
+]

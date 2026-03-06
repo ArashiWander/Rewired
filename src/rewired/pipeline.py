@@ -87,7 +87,6 @@ def _parallel_stages(stages: list[tuple[str, Any, bool]]) -> list[dict]:
 def run_pipeline(
     *,
     dry_run: bool = True,
-    include_evaluation: bool = False,
     send_notifications: bool = True,
 ) -> list[dict]:
     """Execute the full Rewired Index pipeline DAG.
@@ -96,8 +95,6 @@ def run_pipeline(
     ----------
     dry_run : bool
         If True, log proposed trades but do not send to broker.
-    include_evaluation : bool
-        If True, run per-company Gemini evaluation (slower).
     send_notifications : bool
         If True, dispatch Telegram notifications on signal change.
 
@@ -175,31 +172,13 @@ def run_pipeline(
     else:
         console.print("  [red]Signal computation failed[/red]")
 
-    # ── Stage 3: Company Evaluation (optional, parallel per ticker) ──
-    evaluation_batch = None
-    if include_evaluation and universe:
-        console.print("[bold]Stage 3:[/bold] Company evaluation (parallel)")
-
-        def _evaluate():
-            from rewired.agent.evaluator import evaluate_universe
-            return evaluate_universe(universe)
-
-        eval_stage = _stage("Evaluate universe", _evaluate)
-        all_stages.append(eval_stage)
-        evaluation_batch = eval_stage.get("result")
-
-        if evaluation_batch:
-            console.print(
-                f"  Evaluated {len(evaluation_batch.evaluations)} stocks "
-                f"(success rate: {evaluation_batch.success_rate:.0%})"
-            )
-    else:
-        all_stages.append({
-            "name": "Company evaluation",
-            "status": "skipped",
-            "duration": 0,
-            "detail": "Not requested" if not include_evaluation else "No universe",
-        })
+    # ── Stage 3: Company evaluation (removed — decoupled to Oracle Gateway) ─
+    all_stages.append({
+        "name": "Company evaluation",
+        "status": "skipped",
+        "duration": 0,
+        "detail": "Decoupled to Oracle JSON Gateway",
+    })
 
     # ── Stage 4: Sizing (sequential) ─────────────────────────────────
     suggestions = []

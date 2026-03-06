@@ -225,20 +225,24 @@ def _build_heatmap_cells(universe, heatmap_data: dict | None):
     return _js_data, _meta_json, _tooltip_js
 
 
-def build_heatmap_update(universe, heatmap_data: dict | None) -> dict:
-    """Build a partial ECharts option for ``setOption()`` live refresh.
+def build_heatmap_update(universe, heatmap_data: dict | None) -> str:
+    """Build a JS object literal for ``:setOption(...)`` live refresh.
 
-    Returns a dict that, when passed to ``chart.run_chart_method``, will
-    update series data **and** the tooltip formatter in-place (no DOM
-    rebuild).
+    NiceGUI evaluates args for colon-prefixed chart methods as raw
+    JavaScript source, so this function returns a JS object literal string
+    rather than a Python dict.
     """
+    import json as _json
+
     _js_data, _meta_json, _tooltip_js = _build_heatmap_cells(
         universe, heatmap_data,
     )
-    return {
-        "series": [{"data": _js_data}],
-        "tooltip": {"formatter": f":({_tooltip_js})"},
-    }
+    return (
+        "{"
+        f"series:[{{data:{_json.dumps(_js_data, separators=(',', ':'))}}}],"
+        f"tooltip:{{formatter:({_tooltip_js})}}"
+        "}"
+    )
 
 
 # ── 2c. Interactive LxT heatmap (unified single-pane-of-glass) ──────────
@@ -328,10 +332,16 @@ def interactive_lxt_heatmap(
 
     el = ui.echart(option).classes("w-full").style(f"height:{height}")
 
-    # Inject JS tooltip formatter after chart mount
-    el.on("init", lambda _: el.run_chart_method(
-        ":setOption", {"tooltip": {"formatter": f":({_tooltip_js})"}},
-    ))
+    # Inject JS tooltip formatter after chart mount.
+    # NiceGUI treats colon-prefixed run_chart_method calls as raw JS source,
+    # so the argument itself must be a JS object literal string, not a Python dict.
+    el.on(
+        "init",
+        lambda _: el.run_chart_method(
+            ":setOption",
+            f"{{tooltip: {{formatter: ({_tooltip_js})}}}}",
+        ),
+    )
 
     return el
 
@@ -406,110 +416,6 @@ def signal_history_chart(history: list[dict], height: str = "280px") -> ui.echar
 # ── 4. Company evaluation radar ──────────────────────────────────────────
 
 
-def evaluation_radar_chart(
-    evaluation,
-    height: str = "320px",
-) -> ui.echart:
-    """Radar chart showing a single ``CompanyEvaluation``'s sub-scores.
-
-    Five axes: Fundamental, AI-Relevance, Moat, Management, (Composite).
-    """
-    indicators = [
-        {"name": "Fundamental", "max": 10},
-        {"name": "AI-Relevance", "max": 10},
-        {"name": "Moat", "max": 10},
-        {"name": "Management", "max": 10},
-        {"name": "Composite", "max": 10},
-    ]
-    values = [
-        evaluation.fundamental_score,
-        evaluation.ai_relevance_score,
-        evaluation.moat_score,
-        evaluation.management_score,
-        evaluation.composite_score,
-    ]
-
-    option = {
-        "tooltip": {},
-        "radar": {
-            "indicator": indicators,
-            "shape": "polygon",
-            "axisName": {"color": "#ccc"},
-            "splitArea": {"areaStyle": {"color": ["rgba(99,102,241,0.05)", "rgba(99,102,241,0.1)"]}},
-            "splitLine": {"lineStyle": {"color": "#444"}},
-        },
-        "series": [
-            {
-                "type": "radar",
-                "data": [
-                    {
-                        "value": values,
-                        "name": evaluation.ticker,
-                        "areaStyle": {"opacity": 0.25},
-                        "lineStyle": {"width": 2},
-                        "itemStyle": {"color": "#6366f1"},
-                    }
-                ],
-            }
-        ],
-    }
-    return ui.echart(option).classes("w-full").style(f"height:{height}")
-
-
-# ── 5. Batch evaluation bar chart ────────────────────────────────────────
-
-
-def evaluation_bar_chart(
-    evaluations: list,
-    height: str = "320px",
-) -> ui.echart:
-    """Horizontal bar chart ranking stocks by composite evaluation score."""
-    # Sort ascending (bottom-to-top in horizontal bar)
-    sorted_evals = sorted(evaluations, key=lambda e: e.composite_score)
-
-    tickers = [e.ticker for e in sorted_evals]
-    scores = [round(e.composite_score, 1) for e in sorted_evals]
-
-    # Colour bars by score
-    colors: list[str] = []
-    for s in scores:
-        if s >= 7.5:
-            colors.append("#22c55e")
-        elif s >= 5.0:
-            colors.append("#eab308")
-        elif s >= 3.0:
-            colors.append("#f97316")
-        else:
-            colors.append("#ef4444")
-
-    option = {
-        "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}},
-        "grid": {"top": 10, "bottom": 30, "left": 70, "right": 30},
-        "xAxis": {
-            "type": "value",
-            "min": 0,
-            "max": 10,
-            "axisLabel": {"color": "#999"},
-            "splitLine": {"lineStyle": {"color": "#333"}},
-        },
-        "yAxis": {
-            "type": "category",
-            "data": tickers,
-            "axisLabel": {"color": "#ccc"},
-        },
-        "series": [
-            {
-                "type": "bar",
-                "data": [
-                    {"value": s, "itemStyle": {"color": c}}
-                    for s, c in zip(scores, colors)
-                ],
-                "barWidth": "60%",
-                "label": {"show": True, "position": "right", "color": "#ccc", "formatter": "{c}"},
-            }
-        ],
-    }
-    return ui.echart(option).classes("w-full").style(f"height:{height}")
 
 
 # ── 6. Portfolio weight treemap ──────────────────────────────────────────

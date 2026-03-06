@@ -1,11 +1,39 @@
 {
-  "score": 3,
-  "color": "yellow",
-  "explanation": "Agent analysis (unstructured): [Gemini API error: all candidate models failed (gemini-3.1-pro-preview-customtools: 429 RESOURCE_EXHAUSTED. {'error': {'code': 429, 'message': 'You exceeded your current quota, please check your plan ",
-  "capex_trend": "unknown",
-  "key_signal": "",
-  "key_management_quote": "",
+  "companies": {
+    "MSFT": {
+      "capex_absolute_bn": 17.1,
+      "qoq_growth_pct": 2.4,
+      "yoy_growth_pct": 0.0,
+      "explicit_guidance_cut_mentioned": false,
+      "exact_capex_quote": "data unavailable"
+    },
+    "GOOGL": {
+      "capex_absolute_bn": 27.9,
+      "qoq_growth_pct": 16.25,
+      "yoy_growth_pct": 0.0,
+      "explicit_guidance_cut_mentioned": false,
+      "exact_capex_quote": "data unavailable"
+    },
+    "AMZN": {
+      "capex_absolute_bn": 39.5,
+      "qoq_growth_pct": 12.54,
+      "yoy_growth_pct": 0.0,
+      "explicit_guidance_cut_mentioned": false,
+      "exact_capex_quote": "data unavailable"
+    },
+    "META": {
+      "capex_absolute_bn": 21.4,
+      "qoq_growth_pct": 13.83,
+      "yoy_growth_pct": 0.0,
+      "explicit_guidance_cut_mentioned": false,
+      "exact_capex_quote": "data unavailable"
+    }
+  },
   "veto_triggered": false,
-  "timestamp": "2026-03-05T15:47:09.478544",
-  "schema_version": 2
+  "key_management_quote": "",
+  "raw_response": "{\n  \"MSFT\": {\n    \"capex_absolute_bn\": 17.1,\n    \"qoq_growth_pct\": 2.4,\n    \"yoy_growth_pct\": 0.0,\n    \"explicit_guidance_cut_mentioned\": false,\n    \"exact_capex_quote\": \"data unavailable\"\n  },\n  \"GOOGL\": {\n    \"capex_absolute_bn\": 27.9,\n    \"qoq_growth_pct\": 16.25,\n    \"yoy_growth_pct\": 0.0,\n    \"explicit_guidance_cut_mentioned\": false,\n    \"exact_capex_quote\": \"data unavailable\"\n  },\n  \"AMZN\": {\n    \"capex_absolute_bn\": 39.5,\n    \"qoq_growth_pct\": 12.54,\n    \"yoy_growth_pct\": 0.0,\n    \"explicit_guidance_cut_mentioned\": false,\n    \"exact_capex_quote\": \"data unavailable\"\n  },\n  \"META\": {\n    \"capex_absolute_bn\": 21.4,\n    \"qoq_growth_pct\": 13.83,\n    \"yoy_growth_pct\": 0.0,\n    \"explicit_guidance_cut_mentioned\": false,\n    \"exact_capex_quote\": \"data unavailable\"\n  }\n}",
+  "validated": true,
+  "raw_financial_data": "MSFT CAPEX (quarterly): 2025-Q2: $29.9B, 2025-Q1: $19.4B, 2025-Q4: $17.1B, 2025-Q3: $16.7B\nGOOGL CAPEX (quarterly): 2025-Q4: $27.9B, 2025-Q3: $24.0B, 2025-Q2: $22.4B, 2025-Q1: $17.2B\nAMZN CAPEX (quarterly): 2025-Q4: $39.5B, 2025-Q3: $35.1B, 2025-Q2: $32.2B, 2025-Q1: $25.0B\nMETA CAPEX (quarterly): 2025-Q4: $21.4B, 2025-Q3: $18.8B, 2025-Q2: $16.5B, 2025-Q1: $12.9B",
+  "timestamp": "2026-03-06T15:30:11.308949",
+  "schema_version": 4
 }

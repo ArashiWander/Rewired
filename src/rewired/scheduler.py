@@ -82,39 +82,16 @@ def daily_portfolio_summary() -> None:
 
 
 def reeval_universe() -> None:
-    """Run the autonomous universe rebalance cycle.
-
-    Evaluates all stocks, identifies tier mismatches, verifies proposed
-    changes, and applies confirmed reclassifications to universe.yaml.
-    """
+    """Log a universe snapshot (tier changes are now manual-only)."""
     from rewired.agent.rebalancer import rebalance_universe
 
-    console.print(f"\n[dim]--- Universe rebalance at {datetime.now().strftime('%H:%M')} ---[/dim]")
+    console.print(f"\n[dim]--- Universe snapshot at {datetime.now().strftime('%H:%M')} ---[/dim]")
 
     try:
-        changes = rebalance_universe()
-        applied = [c for c in changes if c.get("action") == "applied"]
-        if applied:
-            summary = "Universe rebalance:\n"
-            for c in applied:
-                summary += f"  {c['ticker']}: {c.get('current_tier', '?')} -> {c.get('proposed_tier', '?')}\n"
-            console.print(f"[bold green]{len(applied)} tier change(s) applied.[/bold green]")
-            try:
-                dispatch_portfolio_summary(summary)
-            except Exception:
-                pass
-        else:
-            console.print("[dim]No tier changes applied.[/dim]")
-
-        # Log non-applied changes
-        for c in changes:
-            if c.get("action") != "applied":
-                console.print(
-                    f"  [dim]{c.get('ticker', '?')}: {c.get('action', '?')} "
-                    f"({c.get('reason', '')[:60]})[/dim]"
-                )
+        snapshot = rebalance_universe()
+        console.print(f"[dim]Universe: {len(snapshot)} stocks loaded.[/dim]")
     except Exception as exc:
-        console.print(f"[red]Rebalance error: {exc}[/red]")
+        console.print(f"[red]Universe snapshot error: {exc}[/red]")
 
 
 def start_monitor() -> None:

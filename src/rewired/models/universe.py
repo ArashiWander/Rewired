@@ -152,18 +152,23 @@ def save_universe(universe: Universe, config_path: Path | None = None) -> None:
 # ── Automated onboarding ─────────────────────────────────────────────────
 
 
-def onboard_ticker(ticker: str) -> Stock:
-    """Onboard a new ticker into the universe automatically.
+def onboard_ticker(
+    ticker: str,
+    *,
+    layer: Layer | None = None,
+    tier: Tier | None = None,
+    max_weight_pct: float | None = None,
+) -> Stock:
+    """Onboard a new ticker into the universe.
 
     1. Validate via FMP profile (404/null → ValueError).
     2. Duplicate check against current universe.
-    3. Classify via Gemini COMPANY_CLASSIFY prompt (fallback to L4/T3).
+    3. Use explicit L/T/max_weight if provided, else defaults (L4/T3/5%).
     4. Persist to universe.yaml.
 
     Returns the fully-constructed ``Stock``.  Raises ``ValueError`` on
     invalid ticker or duplicate.
     """
-    import json as _json
     import logging
 
     from rewired.data.fmp import get_profile, get_quote
@@ -250,56 +255,14 @@ def onboard_ticker(ticker: str) -> Stock:
     if not quote:
         logger.warning("No live quote for %s — proceeding with classification.", ticker)
 
-    # ── Step 3: Agentic classification ───────────────────────────────
-    layer = Layer.L4
-    tier = Tier.T3
-    max_weight = 5.0
+    # ── Step 3: Apply explicit L/T/weight or defaults ──────────────
+    stock_layer = layer if layer is not None else Layer.L4
+    stock_tier = tier if tier is not None else Tier.T3
+    max_weight = max(1.0, min(15.0, max_weight_pct)) if max_weight_pct is not None else 5.0
     notes = ""
 
-    try:
-        from rewired.agent.gemini import generate, is_configured as gemini_configured
-        from rewired.agent.prompts import COMPANY_CLASSIFY, SYSTEM_CLASSIFIER
-
-        if gemini_configured():
-            fmt_cap = f"${market_cap / 1e9:.1f}B" if market_cap and market_cap > 0 else "N/A"
-            prompt = COMPANY_CLASSIFY.format(
-                ticker=ticker,
-                name=company_name,
-                sector=sector,
-                industry=industry,
-                market_cap=fmt_cap,
-                description=description,
-            )
-            raw = generate(
-                prompt,
-                system_instruction=SYSTEM_CLASSIFIER,
-                json_output=True,
-                max_retries=2,
-            )
-            text = raw.strip()
-            if text.startswith("```"):
-                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-            if text.endswith("```"):
-                text = text[:-3]
-            text = text.strip()
-            if text.startswith("json"):
-                text = text[4:].strip()
-
-            data = _json.loads(text)
-            layer_str = str(data.get("layer", "L4")).upper().strip()
-            tier_str = str(data.get("tier", "T3")).upper().strip()
-            layer = Layer[layer_str] if layer_str in Layer.__members__ else Layer.L4
-            tier = Tier[tier_str] if tier_str in Tier.__members__ else Tier.T3
-            raw_weight = data.get("max_weight_pct", 5.0)
-            max_weight = max(1.0, min(15.0, float(raw_weight)))
-            reasoning = str(data.get("reasoning", ""))[:200]
-            if reasoning:
-                notes = f"Auto-classified: {reasoning}"
-        else:
-            notes = "\u26a0 DEFAULTED: Gemini unavailable \u2014 defensive defaults (L4/T3/5%)."
-    except Exception as exc:
-        logger.warning("Gemini classification failed for %s: %s", ticker, exc)
-        notes = f"\u26a0 DEFAULTED: Gemini error \u2014 defensive defaults ({exc})"
+    if layer is None or tier is None:
+        notes = "Defaults applied (L4/T3/5%) — adjust via Oracle Gateway."
 
     if ticker != requested_ticker:
         prefix = f"Resolved from input '{requested_ticker}' to '{ticker}'."
@@ -309,8 +272,8 @@ def onboard_ticker(ticker: str) -> Stock:
     stock = Stock(
         ticker=ticker,
         name=company_name,
-        layer=layer,
-        tier=tier,
+        layer=stock_layer,
+        tier=stock_tier,
         max_weight_pct=max_weight,
         notes=notes,
     )

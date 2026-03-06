@@ -131,7 +131,31 @@ def get_cash_flow(
     if not is_configured():
         return []
     try:
-        return _get("cash-flow-statement", {"symbol": ticker.upper(), "period": period, "limit": limit}) or []
+        data = _get("cash-flow-statement", {"symbol": ticker.upper(), "period": period, "limit": limit}) or []
+        if data or period != "quarter" or limit <= 4:
+            return data
+
+        # The stable API can return an empty payload for larger quarterly
+        # limits even when recent quarterly cash-flow data exists. Retry with
+        # four quarters so CAPEX helpers remain usable on lower-tier plans.
+        logger.debug(
+            "cash-flow quarterly request returned empty for %s at limit=%s; retrying with limit=4",
+            ticker,
+            limit,
+        )
+        return _get("cash-flow-statement", {"symbol": ticker.upper(), "period": period, "limit": 4}) or []
+    except requests.HTTPError as exc:
+        if exc.response is not None and exc.response.status_code == 402 and period == "quarter" and limit > 4:
+            logger.debug(
+                "cash-flow quarterly request premium-gated for %s at limit=%s; retrying with limit=4",
+                ticker,
+                limit,
+            )
+            try:
+                return _get("cash-flow-statement", {"symbol": ticker.upper(), "period": period, "limit": 4}) or []
+            except Exception:
+                return []
+        return []
     except Exception:
         return []
 

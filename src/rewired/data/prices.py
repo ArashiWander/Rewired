@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
+
 import yfinance as yf
 import pandas as pd
 
 from rewired.data.fx import usd_to_eur
+
+logger = logging.getLogger(__name__)
 
 
 def get_current_prices(tickers: list[str]) -> dict[str, float]:
@@ -14,7 +18,15 @@ def get_current_prices(tickers: list[str]) -> dict[str, float]:
     Returns dict mapping ticker -> price in USD.
     """
     prices = {}
-    data = yf.download(tickers, period="1d", progress=False)
+    if not tickers:
+        return prices
+
+    try:
+        data = yf.download(tickers, period="1d", progress=False)
+    except Exception as exc:
+        logger.warning("Price download failed for %s: %s", ",".join(tickers), exc)
+        return prices
+
     if data.empty:
         return prices
 
@@ -39,8 +51,12 @@ def get_current_prices_eur(tickers: list[str]) -> dict[str, float]:
 
 def get_history(ticker: str, period: str = "1y") -> pd.DataFrame:
     """Fetch historical OHLCV data for a single ticker."""
-    t = yf.Ticker(ticker)
-    return t.history(period=period)
+    try:
+        t = yf.Ticker(ticker)
+        return t.history(period=period)
+    except Exception as exc:
+        logger.warning("Price history fetch failed for %s: %s", ticker, exc)
+        return pd.DataFrame()
 
 
 def get_moving_averages(ticker: str) -> dict[str, float | None]:

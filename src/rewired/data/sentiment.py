@@ -9,20 +9,32 @@ Provides the data points required by the boolean rules engine:
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 
 import yfinance as yf
 
 from rewired.models.signals import SignalColor, SignalReading
 
+logger = logging.getLogger(__name__)
+
 
 def get_sentiment_readings() -> list[SignalReading]:
-    """Fetch sentiment signal readings for the rules engine."""
+    """Fetch sentiment signal readings for the rules engine.
+
+    Circuit breaker: if VIX data is completely unavailable,
+    logs SENTIMENT_BLIND_DEFAULT_ORANGE.
+    """
     readings = []
     now = datetime.now()
 
     readings.extend(_vix_reading(now))
     readings.extend(_vix_term_structure(now))
+
+    # Circuit breaker: VIX is the single critical metric
+    vix_present = any(r.name == "VIX" for r in readings)
+    if not vix_present:
+        logger.warning("SENTIMENT_BLIND_DEFAULT_ORANGE: VIX data unavailable")
 
     return readings
 

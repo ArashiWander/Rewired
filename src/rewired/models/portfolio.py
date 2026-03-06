@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+import uuid
+from datetime import date as _date, datetime
+from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from rewired.models.signals import SignalColor
 
@@ -22,12 +24,13 @@ class Position(BaseModel):
 
 
 class Transaction(BaseModel):
-    """A recorded buy/sell."""
-    ticker: str
-    action: str  # BUY or SELL
-    shares: float
-    price_eur: float
-    date: date
+    """A recorded buy/sell/deposit/withdrawal."""
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
+    ticker: str = ""
+    action: Literal["BUY", "SELL", "DEPOSIT", "WITHDRAW"] = "BUY"
+    shares: float = 0.0
+    price_eur: float = 0.0
+    date: _date = Field(default_factory=_date.today)
     signal_color_at_time: SignalColor | None = None
     notes: str = ""
 

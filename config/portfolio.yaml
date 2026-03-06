@@ -1,38 +1,29 @@
-# Portfolio configuration for Rewired Index
+# Portfolio configuration for Rewired Index — 2D L×T Constraint Solver
 
 total_capital_eur: 3100.0
 
-# Base allocation by tier (must sum to 1.0)
-allocation_by_tier:
-  T1: 0.40    # 1240 EUR - Core holdings
-  T2: 0.30    #  930 EUR - Growth engine
-  T3: 0.20    #  620 EUR - Thematic allocation
-  T4: 0.10    #  310 EUR - Speculation
+# Static layer budget percentages (of investable capital after cash floor)
+# L4 is NOT listed here — it is the dynamic residual: Total - (Cash + L1 + L2 + L3 + L5)
+layer_budgets:
+  L1: 0.175   # Physical Infrastructure  (17.5%)
+  L2: 0.190   # Digital Infrastructure   (19.0%)
+  L3: 0.250   # Core Intelligence        (25.0%)
+  L5: 0.075   # Frontier Exploration      (7.5%)
 
-# Signal color multipliers applied to base allocation
-signal_multipliers:
-  green: 1.0
-  yellow: 0.7
-  orange: 0.4
-  red: 0.1
+# Cash floor mapping — minimum cash reserve by regime color
+cash_floors:
+  green: 0.00
+  yellow: 0.05
+  orange: 0.12
+  red: 0.20
 
-# What to do with each tier when signal turns bad
-tier_rules_by_signal:
-  red:
-    T1: hold
-    T2: trim_50
-    T3: exit
-    T4: exit
-  orange:
-    T1: hold
-    T2: hold
-    T3: trim_50
-    T4: exit
-  yellow:
-    T1: hold
-    T2: hold
-    T3: hold
-    T4: trim_50
+# Intra-layer tier allocation ratios (must sum < 1.0; remainder = structural buffer)
+tier_ratios:
+  T1: 0.500   # Core holdings
+  T2: 0.275   # Growth engine
+  T3: 0.100   # Thematic allocation
+  T4: 0.055   # Speculation
+  # 7% structural buffer (unallocated → cascades to L4 or cash)
 
 # Position constraints
 constraints:

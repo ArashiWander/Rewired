@@ -8,6 +8,7 @@ consumer sentiment) for informational display.
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import datetime
 
@@ -16,6 +17,7 @@ from dotenv import load_dotenv
 from rewired.models.signals import SignalColor, SignalReading
 
 load_dotenv()
+logger = logging.getLogger(__name__)
 
 
 def _get_fred_client():
@@ -31,6 +33,8 @@ def get_macro_readings() -> list[SignalReading]:
     """Fetch macro economic readings from FRED.
 
     Falls back to yfinance-based proxies if FRED API key is not set.
+    Circuit breaker: if critical metrics (PMI, PCE, Retail Sales) are
+    all missing, logs MACRO_BLIND_DEFAULT_ORANGE.
     """
     fred = _get_fred_client()
     readings = []
@@ -40,6 +44,12 @@ def get_macro_readings() -> list[SignalReading]:
         readings.extend(_fred_readings(fred, now))
     else:
         readings.extend(_proxy_readings(now))
+
+    # Circuit breaker: check if critical metrics are present
+    critical_names = {"ISM PMI", "Core PCE MoM", "Retail Sales MoM"}
+    found = {r.name for r in readings} & critical_names
+    if not found:
+        logger.warning("MACRO_BLIND_DEFAULT_ORANGE: No critical macro metrics available")
 
     return readings
 
