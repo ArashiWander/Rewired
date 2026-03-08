@@ -11,11 +11,12 @@ layer_budgets:
   L5: 0.075   # Frontier Exploration      (7.5%)
 
 # Cash floor mapping — minimum cash reserve by regime color
+# Monotonic escalation: 5% → 7% → 10% → 18%
 cash_floors:
   green: 0.05
-  yellow: 0.15
-  orange: 0.30
-  red: 0.70
+  yellow: 0.07
+  orange: 0.10
+  red: 0.18
 
 # Intra-layer tier allocation ratios (must sum < 1.0; remainder = structural buffer)
 tier_ratios:

@@ -2,10 +2,10 @@
 
 Replaces the old 1D tier-based sizing.  The allocation flows through five phases:
 
-  Phase 1 — Cash Floor: regime → minimum cash reserve.
+  Phase 1 — Cash Floor: regime → minimum cash reserve (parked in XEON).
   Phase 2 — Static Layer Budgets: L1/L2/L3/L5 hard allocations.
-  Phase 3 — L4 Dynamic Residual: L4 = Total − (Cash + L1 + L2 + L3 + L5).
-  Phase 4 — Intra-Layer Distribution: T1/T2/T3/T4 ratios within each layer.
+  Phase 3 — L4 Dynamic Residual: L4 = Total − (Cash + Hedge + L1 + L2 + L3 + L5).
+  Phase 4 — Intra-Layer Distribution: T1/T2 active, T3/T4 frozen at current.
   Phase 5 — Minimum Tolerance: |delta| < 0.5% → HOLD (anti-friction).
 """
 
@@ -23,7 +23,8 @@ from rewired.models.universe import Layer, Tier, Universe, Stock
 
 logger = logging.getLogger(__name__)
 
-_HEDGE_TICKER = "QQQS.L"  # Inverse Nasdaq ETF (not in universe)
+_HEDGE_TICKER = "DXS3.DE"  # Xtrackers S&P 500 Inverse Daily Swap (XETRA, EUR)
+_CASH_TICKER = "XEON.DE"   # Xtrackers EUR Overnight Rate Swap (XETRA, EUR)
 
 
 def _load_portfolio_config() -> dict:
@@ -51,8 +52,13 @@ def calculate_suggestions(
     constraints = config.get("constraints", {})
     min_pos = constraints.get("min_position_eur", 10)
 
+    # Build current positions map for T3/T4 freeze logic
+    current_positions = {
+        t: p.market_value_eur for t, p in portfolio.positions.items()
+    }
+
     # Run the solver
-    targets = _solve_lxt(config, universe, regime, total)
+    targets = _solve_lxt(config, universe, regime, total, current_positions)
 
     suggestions: list[dict] = []
     freed_capital = 0.0
@@ -118,13 +124,37 @@ def calculate_suggestions(
             "priority": 2,
         })
     elif hedge_delta < -min_pos:
-        # Edge case: Hedge Unwind — force QQQS.L to 0 on upgrade
         suggestions.append({
             "ticker": _HEDGE_TICKER,
             "action": "SELL",
             "amount_eur": round(abs(hedge_delta), 2),
             "reason": f"Hedge unwind: regime improved to {regime.value.upper()}",
             "priority": 1,
+        })
+
+    # ── XEON cash actions ─────────────────────────────────────────────
+    xeon_target = targets.get(_CASH_TICKER, 0.0)
+    xeon_pos = portfolio.positions.get(_CASH_TICKER)
+    xeon_current = xeon_pos.market_value_eur if xeon_pos else 0.0
+    xeon_delta = xeon_target - xeon_current
+
+    if xeon_delta < -min_pos:
+        # Sell XEON first to free capital for stock buys
+        suggestions.append({
+            "ticker": _CASH_TICKER,
+            "action": "SELL",
+            "amount_eur": round(abs(xeon_delta), 2),
+            "reason": f"Cash release: regime improved to {regime.value.upper()}",
+            "priority": 1,
+        })
+    elif xeon_delta > min_pos:
+        # Buy XEON last — park remaining capital
+        suggestions.append({
+            "ticker": _CASH_TICKER,
+            "action": "BUY",
+            "amount_eur": round(xeon_delta, 2),
+            "reason": f"Cash parking: {regime.value.upper()} regime",
+            "priority": 4,
         })
 
     suggestions.sort(key=lambda s: s.get("priority", 99))
@@ -136,41 +166,66 @@ def _solve_lxt(
     universe: Universe,
     regime: SignalColor,
     total: float,
+    current_positions: dict[str, float] | None = None,
 ) -> dict[str, float]:
     """Run 5-phase L×T constraint solver. Returns {ticker: target_eur}.
 
-    Also includes _HEDGE_TICKER if hedge is warranted.
+    Also includes _HEDGE_TICKER and _CASH_TICKER allocations.
+    When *current_positions* is provided, frozen tiers (T3/T4 under
+    YELLOW/ORANGE/RED) are locked at their current market value instead
+    of being liquidated.
     """
+    if current_positions is None:
+        current_positions = {}
+
     layer_budgets_cfg = config.get("layer_budgets", {})
     cash_floors = config.get("cash_floors", {})
     tier_ratios = config.get("tier_ratios", {})
     constraints = config.get("constraints", {})
     max_single_pct = constraints.get("max_single_position_pct", 15.0)
 
-    # ── Phase 1: Cash Floor ───────────────────────────────────────────
+    # ── Hedge allocation (before cash floor, deducted from investable) ─
+    hedge_pct = _hedge_pct(regime)
+    hedge_target = total * hedge_pct
+
+    # ── Phase 1: Cash Floor (parked in XEON) ──────────────────────────
     cash_pct = cash_floors.get(regime.value, 0.05)
     cash_target = total * cash_pct
-    investable = total - cash_target
+    investable = total - cash_target - hedge_target
 
-    initiate_hedge = regime in (SignalColor.ORANGE, SignalColor.RED)
-    crisis_liquidation = regime == SignalColor.RED
+    # ── Freeze T3/T4: lock at current value, subtract from investable ─
+    frozen_tiers = _frozen_tiers(regime)
+    frozen_total = 0.0
+    frozen_values: dict[str, float] = {}  # ticker → locked value
+    for stock in universe.stocks:
+        if stock.tier in frozen_tiers:
+            held = current_positions.get(stock.ticker, 0.0)
+            frozen_values[stock.ticker] = held
+            frozen_total += held
 
-    # ── Phase 2: Static Layer Budgets ─────────────────────────────────
+    # Clamp: frozen positions can't exceed investable
+    if frozen_total > investable:
+        if frozen_total > 0:
+            scale = investable / frozen_total
+            for t in frozen_values:
+                frozen_values[t] = round(frozen_values[t] * scale, 2)
+            frozen_total = investable
+
+    active_investable = max(0.0, investable - frozen_total)
+
+    # ── Phase 2: Static Layer Budgets (from active_investable) ────────
+    eligible_tiers = _eligible_tiers(regime)
     raw_budgets = {}
     for layer in (Layer.L1, Layer.L2, Layer.L3, Layer.L5):
         key = f"L{layer.value}"
         pct = layer_budgets_cfg.get(key, 0.0)
-        # RED veto: L5 → 0
-        if crisis_liquidation and layer == Layer.L5:
-            pct = 0.0
-        raw_budgets[layer] = investable * pct
+        raw_budgets[layer] = active_investable * pct
 
     static_sum = sum(raw_budgets.values())
 
     # ── Phase 3: L4 Dynamic Residual ──────────────────────────────────
-    l4_budget = investable - static_sum
+    l4_budget = active_investable - static_sum
     if l4_budget < 0:
-        # Deficit safeguard: proportionally reduce L1/L2/L3 to cover
         deficit = abs(l4_budget)
         if static_sum > 0:
             for layer in (Layer.L1, Layer.L2, Layer.L3):
@@ -181,9 +236,6 @@ def _solve_lxt(
     raw_budgets[Layer.L4] = l4_budget
 
     # ── Phase 4: Intra-Layer Distribution ─────────────────────────────
-    # Eligibility filter by regime
-    eligible_tiers = _eligible_tiers(regime)
-
     targets: dict[str, float] = {}
     layer_surplus = 0.0
 
@@ -191,33 +243,40 @@ def _solve_lxt(
         budget = raw_budgets.get(layer, 0.0)
         layer_stocks = universe.get_by_layer(layer)
 
-        if not layer_stocks or budget <= 0:
-            for s in layer_stocks:
+        if not layer_stocks:
+            continue
+
+        # Assign frozen stocks first
+        for stock in layer_stocks:
+            if stock.ticker in frozen_values:
+                targets[stock.ticker] = round(frozen_values[stock.ticker], 2)
+
+        active_layer_stocks = [
+            s for s in layer_stocks if s.ticker not in frozen_values
+        ]
+
+        if not active_layer_stocks or budget <= 0:
+            for s in active_layer_stocks:
                 targets[s.ticker] = 0.0
             continue
 
-        # Distribute within layer by tier ratios
         allocated_in_layer = 0.0
-        for stock in layer_stocks:
+        for stock in active_layer_stocks:
             tier_key = f"T{stock.tier.value}"
             tier_ratio = tier_ratios.get(tier_key, 0.0)
 
-            # Ineligible tier under current regime → target = 0
             if stock.tier not in eligible_tiers:
                 targets[stock.ticker] = 0.0
                 continue
 
-            # Count eligible stocks in same layer+tier cell
             cell_stocks = [
-                s for s in layer_stocks
+                s for s in active_layer_stocks
                 if s.tier == stock.tier and s.tier in eligible_tiers
             ]
             n_cell = len(cell_stocks) if cell_stocks else 1
 
-            # Per-stock allocation
             alloc = budget * (tier_ratio / n_cell)
 
-            # Apply max_weight_pct cap
             cap = total * (stock.max_weight_pct / 100)
             if alloc > cap:
                 layer_surplus += alloc - cap
@@ -226,15 +285,16 @@ def _solve_lxt(
             targets[stock.ticker] = round(alloc, 2)
             allocated_in_layer += alloc
 
-        # Layer surplus: unallocated budget within layer
         if allocated_in_layer < budget:
             layer_surplus += budget - allocated_in_layer
 
-    # Surplus cascade: layer surplus → L4 stocks, L4 surplus → cash
+    # Surplus cascade: layer surplus → eligible L4 stocks
     if layer_surplus > 0:
         l4_stocks = [
             s for s in universe.stocks
-            if s.layer == Layer.L4 and s.tier in eligible_tiers
+            if s.layer == Layer.L4
+            and s.tier in eligible_tiers
+            and s.ticker not in frozen_values
         ]
         if l4_stocks:
             per_l4 = layer_surplus / len(l4_stocks)
@@ -245,40 +305,51 @@ def _solve_lxt(
                 add = min(per_l4, room)
                 targets[s.ticker] = round(current + add, 2)
                 layer_surplus -= add
-            # Remaining surplus goes to cash (handled implicitly)
 
-    # ── Hedge protocols ───────────────────────────────────────────────
-    hedge_target = 0.0
-    if initiate_hedge and not crisis_liquidation:
-        # ORANGE: deploy 6% of portfolio into QQQS.L
-        hedge_target = total * 0.06
-    elif crisis_liquidation:
-        # RED: no QQQS.L — full liquidation mode
-        hedge_target = 0.0
-    else:
-        # YELLOW/GREEN: unwind hedge entirely (edge case: Hedge Unwind)
-        hedge_target = 0.0
-
+    # ── Instrument targets ────────────────────────────────────────────
     targets[_HEDGE_TICKER] = round(hedge_target, 2)
+    targets[_CASH_TICKER] = round(cash_target, 2)
 
     return targets
 
 
+def _hedge_pct(regime: SignalColor) -> float:
+    """Return hedge allocation percentage by regime.
+
+    GREEN/YELLOW → 0% (no hedge).
+    ORANGE       → 6% (tactical hedge).
+    RED          → 10% (crisis hedge escalation).
+    """
+    if regime == SignalColor.ORANGE:
+        return 0.06
+    if regime == SignalColor.RED:
+        return 0.10
+    return 0.0
+
+
+def _frozen_tiers(regime: SignalColor) -> set[Tier]:
+    """Return tiers frozen at current value (no new buys, no forced sells).
+
+    GREEN  → nothing frozen.
+    YELLOW → T3/T4 frozen (pause new positions).
+    ORANGE → T3/T4 frozen (monotonic escalation).
+    RED    → T3/T4 frozen (crisis pause).
+    """
+    if regime == SignalColor.GREEN:
+        return set()
+    return {Tier.T3, Tier.T4}
+
+
 def _eligible_tiers(regime: SignalColor) -> set[Tier]:
-    """Return set of tiers eligible for new buys under current regime.
+    """Return tiers eligible for new allocation (not frozen).
 
     GREEN  → all tiers.
-    YELLOW → T1/T2 (hold T3/T4 but no new buys — handled by existing positions).
-    ORANGE → T1/T2 only (T3/T4 forced to 0).
-    RED    → T1 only (T2 allowed to hold).
+    YELLOW → T1/T2 only (T3/T4 frozen at current value).
+    ORANGE → T1/T2 only.
+    RED    → T1/T2 only.
     """
     if regime == SignalColor.GREEN:
         return {Tier.T1, Tier.T2, Tier.T3, Tier.T4}
-    if regime == SignalColor.YELLOW:
-        return {Tier.T1, Tier.T2, Tier.T3, Tier.T4}
-    if regime == SignalColor.ORANGE:
-        return {Tier.T1, Tier.T2}
-    # RED
     return {Tier.T1, Tier.T2}
 
 
@@ -303,8 +374,13 @@ def calculate_pies_allocation(
     # Tolerance band: 0.5% of total capital for action determination
     tolerance_eur = total * 0.005
 
+    # Build current positions map for T3/T4 freeze logic
+    current_positions = {
+        t: p.market_value_eur for t, p in portfolio.positions.items()
+    }
+
     # Run the solver
-    targets = _solve_lxt(config, universe, regime, total)
+    targets = _solve_lxt(config, universe, regime, total, current_positions)
 
     allocations = []
     total_target_eur = 0.0
@@ -339,19 +415,19 @@ def calculate_pies_allocation(
             "reasoning": f"L{stock.layer.value}/T{stock.tier.value} @ {regime.value.upper()}",
         })
 
-    # QQQS.L hedge row
+    # Hedge row (DXS3.DE)
     hedge_target = targets.get(_HEDGE_TICKER, 0.0)
     hedge_pos = portfolio.positions.get(_HEDGE_TICKER)
     hedge_current = round(hedge_pos.market_value_eur, 2) if hedge_pos else 0.0
-    hedge_pct = round((hedge_target / total * 100) if total > 0 else 0.0, 1)
+    h_pct = round((hedge_target / total * 100) if total > 0 else 0.0, 1)
     hedge_delta = round(hedge_target - hedge_current, 2)
     total_target_eur += hedge_target
 
     if hedge_target > 0 or hedge_current > 0:
         allocations.append({
             "ticker": _HEDGE_TICKER,
-            "name": "Invesco QQQ Short (Hedge)",
-            "target_pct": hedge_pct,
+            "name": "Xtrackers S&P 500 Inverse Daily (Hedge)",
+            "target_pct": h_pct,
             "target_eur": round(hedge_target, 2),
             "current_pct": round((hedge_current / total * 100) if total > 0 else 0.0, 1),
             "current_eur": hedge_current,
@@ -362,23 +438,46 @@ def calculate_pies_allocation(
             "reasoning": f"Hedge: {regime.value.upper()} regime",
         })
 
-    # Cash row
-    cash_pct = round(max(0.0, 100.0 - (total_target_eur / total * 100 if total > 0 else 0.0)), 1)
-    cash_target_eur = round(total * cash_pct / 100, 2)
-    cash_current = round(portfolio.cash_eur, 2)
+    # Cash row (XEON.DE)
+    xeon_target = targets.get(_CASH_TICKER, 0.0)
+    xeon_pos = portfolio.positions.get(_CASH_TICKER)
+    xeon_current = round(xeon_pos.market_value_eur, 2) if xeon_pos else 0.0
+    x_pct = round((xeon_target / total * 100) if total > 0 else 0.0, 1)
+    xeon_delta = round(xeon_target - xeon_current, 2)
+    total_target_eur += xeon_target
 
     allocations.append({
-        "ticker": "CASH",
-        "name": "Cash Reserve",
-        "target_pct": cash_pct,
-        "target_eur": cash_target_eur,
-        "current_pct": round(cash_current / total * 100, 1) if total > 0 else 0.0,
-        "current_eur": cash_current,
-        "delta_eur": round(cash_target_eur - cash_current, 2),
-        "action": "HOLD",
-        "layer": "-",
+        "ticker": _CASH_TICKER,
+        "name": "Xtrackers EUR Overnight Rate (Cash)",
+        "target_pct": x_pct,
+        "target_eur": round(xeon_target, 2),
+        "current_pct": round((xeon_current / total * 100) if total > 0 else 0.0, 1),
+        "current_eur": xeon_current,
+        "delta_eur": xeon_delta,
+        "action": "BUY" if xeon_delta > tolerance_eur else ("SELL" if xeon_delta < -tolerance_eur else "HOLD"),
+        "layer": "CASH",
         "tier": "-",
-        "reasoning": "Cash reserve",
+        "reasoning": f"Cash: {regime.value.upper()} regime",
     })
+
+    # Residual broker cash row (informational — should converge to 0)
+    residual_pct = round(max(0.0, 100.0 - (total_target_eur / total * 100 if total > 0 else 0.0)), 1)
+    residual_eur = round(total * residual_pct / 100, 2)
+    cash_current = round(portfolio.cash_eur, 2)
+
+    if residual_pct > 0.1 or cash_current > 0:
+        allocations.append({
+            "ticker": "CASH",
+            "name": "Broker Cash (Residual)",
+            "target_pct": residual_pct,
+            "target_eur": residual_eur,
+            "current_pct": round(cash_current / total * 100, 1) if total > 0 else 0.0,
+            "current_eur": cash_current,
+            "delta_eur": round(residual_eur - cash_current, 2),
+            "action": "HOLD",
+            "layer": "-",
+            "tier": "-",
+            "reasoning": "Residual broker cash",
+        })
 
     return allocations

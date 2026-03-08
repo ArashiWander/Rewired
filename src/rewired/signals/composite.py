@@ -1,4 +1,8 @@
-"""Composite signal aggregation — truth-table waterfall (no weighted averaging).
+"""Composite signal aggregation — divergence-aware truth-table waterfall.
+
+Core philosophy: "不跟着情绪走，用经济硬数据和市场情绪的背离来判断攻守节奏"
+(Don't follow emotions.  Use the DIVERGENCE between hard economic data
+and market sentiment to determine offensive/defensive rhythm.)
 
 Rules are evaluated top-to-bottom, most defensive first.  The first
 matching row determines the composite color.  AI Health RED is an
@@ -19,25 +23,28 @@ from rewired.models.signals import (
 # They are NOT used in the truth-table evaluation path.
 CATEGORY_WEIGHTS = {
     SignalCategory.MACRO: 0.30,
-    SignalCategory.SENTIMENT: 0.30,
-    SignalCategory.AI_HEALTH: 0.40,
+    SignalCategory.SENTIMENT: 0.20,
+    SignalCategory.AI_HEALTH: 0.50,
 }
 
 
 def compute_composite(
     categories: dict[SignalCategory, CategorySignal],
 ) -> tuple[SignalColor, bool, dict]:
-    """Compute overall signal color via deterministic truth-table waterfall.
+    """Compute overall signal color via divergence-aware truth-table waterfall.
 
     Evaluation order (first match wins):
-      0. AI_HEALTH RED → global RED (absolute veto)
-      1. Any category RED → ORANGE floor (worst-of override)
-      2. AI_HEALTH ORANGE → composite cannot exceed ORANGE
-      3. MACRO RED or SENTIMENT RED → composite = ORANGE
-      4. All three GREEN → GREEN
-      5. ≥2 categories GREEN, no ORANGE or RED → GREEN
-      6. Any ORANGE present → YELLOW
-      7. Default → YELLOW
+      0. AI_HEALTH RED        -> global RED (absolute veto)
+      1. AI_HEALTH ORANGE     -> cap at ORANGE (AI uncertainty)
+      2. MACRO GREEN          -> GREEN (contrarian: strong fundamentals
+         override market fear)
+      3. MACRO RED            -> ORANGE floor (severe weakness)
+      4. MACRO ORANGE + Sentiment GREEN/YELLOW -> ORANGE (complacency trap)
+      5. MACRO ORANGE + Sentiment ORANGE/RED   -> YELLOW (market pricing in)
+      6. All three GREEN      -> GREEN
+      7. >=2 GREEN, no ORANGE/RED -> GREEN
+      8. Any ORANGE present   -> YELLOW
+      9. Default              -> YELLOW
 
     Returns ``(color, veto_active, transparency)`` where *transparency*
     contains the full decision breakdown for the Glass-Box UI.
@@ -67,52 +74,70 @@ def compute_composite(
 
     colors = [c for c in (macro_color, sentiment_color, ai_color) if c is not None]
 
-    # ── Rule 0: AI Health VETO (absolute) ─────────────────────────────
+    # -- Rule 0: AI Health VETO (absolute) -----------------------------
     if ai_color == SignalColor.RED:
         transparency["veto_active"] = True
         transparency["rule_matched"] = "AI_HEALTH_VETO_RED"
         transparency["final_color"] = SignalColor.RED.value
         return SignalColor.RED, True, transparency
 
-    # ── Rule 1: Any category RED → ORANGE floor ──────────────────────
-    if SignalColor.RED in colors:
-        transparency["rule_matched"] = "ANY_RED_FLOOR_ORANGE"
-        transparency["final_color"] = SignalColor.ORANGE.value
-        return SignalColor.ORANGE, False, transparency
-
-    # ── Rule 2: AI Health ORANGE → cap at ORANGE ─────────────────────
+    # -- Rule 1: AI Health ORANGE -> cap at ORANGE ---------------------
     if ai_color == SignalColor.ORANGE:
         transparency["rule_matched"] = "AI_HEALTH_ORANGE_CAP"
         transparency["final_color"] = SignalColor.ORANGE.value
         return SignalColor.ORANGE, False, transparency
 
-    # ── Rule 3: Two or more ORANGE → ORANGE ──────────────────────────
-    orange_count = colors.count(SignalColor.ORANGE)
-    if orange_count >= 2:
-        transparency["rule_matched"] = "MULTI_ORANGE_FLOOR"
+    # -- Rule 2: MACRO GREEN -> GREEN (contrarian core) ----------------
+    # Strong fundamentals override market sentiment.  This is THE key
+    # divergence rule from the image philosophy.
+    if macro_color == SignalColor.GREEN:
+        transparency["rule_matched"] = "MACRO_GREEN_CONTRARIAN"
+        transparency["final_color"] = SignalColor.GREEN.value
+        return SignalColor.GREEN, False, transparency
+
+    # -- Rule 3: MACRO RED -> ORANGE floor -----------------------------
+    if macro_color == SignalColor.RED:
+        transparency["rule_matched"] = "MACRO_RED_FLOOR_ORANGE"
         transparency["final_color"] = SignalColor.ORANGE.value
         return SignalColor.ORANGE, False, transparency
 
-    # ── Rule 4: All GREEN → GREEN ────────────────────────────────────
+    # -- Rule 4: MACRO ORANGE + Sentiment calm -> ORANGE (complacency) -
+    if macro_color == SignalColor.ORANGE and sentiment_color in (
+        SignalColor.GREEN, SignalColor.YELLOW,
+    ):
+        transparency["rule_matched"] = "COMPLACENCY_TRAP_ORANGE"
+        transparency["final_color"] = SignalColor.ORANGE.value
+        return SignalColor.ORANGE, False, transparency
+
+    # -- Rule 5: MACRO ORANGE + Sentiment fearful -> YELLOW ------------
+    if macro_color == SignalColor.ORANGE and sentiment_color in (
+        SignalColor.ORANGE, SignalColor.RED,
+    ):
+        transparency["rule_matched"] = "MACRO_WEAK_SENTIMENT_PRICING_IN"
+        transparency["final_color"] = SignalColor.YELLOW.value
+        return SignalColor.YELLOW, False, transparency
+
+    # -- Rule 6: All GREEN -> GREEN ------------------------------------
     if all(c == SignalColor.GREEN for c in colors) and len(colors) == 3:
         transparency["rule_matched"] = "ALL_GREEN"
         transparency["final_color"] = SignalColor.GREEN.value
         return SignalColor.GREEN, False, transparency
 
-    # ── Rule 5: ≥2 GREEN, no ORANGE/RED → GREEN ─────────────────────
+    # -- Rule 7: >=2 GREEN, no ORANGE/RED -> GREEN ---------------------
     green_count = colors.count(SignalColor.GREEN)
-    if green_count >= 2 and orange_count == 0:
+    orange_count = colors.count(SignalColor.ORANGE)
+    if green_count >= 2 and orange_count == 0 and SignalColor.RED not in colors:
         transparency["rule_matched"] = "MAJORITY_GREEN"
         transparency["final_color"] = SignalColor.GREEN.value
         return SignalColor.GREEN, False, transparency
 
-    # ── Rule 6: Any single ORANGE → YELLOW ──────────────────────────
+    # -- Rule 8: Any ORANGE present -> YELLOW --------------------------
     if orange_count >= 1:
         transparency["rule_matched"] = "SINGLE_ORANGE_YELLOW"
         transparency["final_color"] = SignalColor.YELLOW.value
         return SignalColor.YELLOW, False, transparency
 
-    # ── Rule 7: Default → YELLOW ─────────────────────────────────────
+    # -- Rule 9: Default -> YELLOW -------------------------------------
     transparency["rule_matched"] = "DEFAULT_YELLOW"
     transparency["final_color"] = SignalColor.YELLOW.value
     return SignalColor.YELLOW, False, transparency

@@ -19,6 +19,7 @@ from rewired.portfolio.sizing import (
     calculate_suggestions,
     calculate_pies_allocation,
     _HEDGE_TICKER,
+    _CASH_TICKER,
 )
 from tests.conftest import make_composite
 
@@ -27,7 +28,7 @@ from tests.conftest import make_composite
 
 _LXT_CONFIG = {
     "layer_budgets": {"L1": 0.175, "L2": 0.190, "L3": 0.250, "L5": 0.075},
-    "cash_floors": {"green": 0.05, "yellow": 0.15, "orange": 0.30, "red": 0.70},
+    "cash_floors": {"green": 0.05, "yellow": 0.07, "orange": 0.10, "red": 0.18},
     "tier_ratios": {"T1": 0.500, "T2": 0.275, "T3": 0.100, "T4": 0.055},
     "constraints": {
         "max_single_position_pct": 15.0,
@@ -115,27 +116,27 @@ class TestCashFloor:
     def test_green_5pct_cash_floor(self, lxt_universe):
         """GREEN cash floor is 5% — 95% of capital is investable."""
         targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.GREEN, 10000.0)
-        stock_total = sum(v for k, v in targets.items() if k != _HEDGE_TICKER)
+        stock_total = sum(v for k, v in targets.items() if k not in (_HEDGE_TICKER, _CASH_TICKER))
         # 5% cash floor → max investable = 9500; tier ratios + caps reduce further
         assert stock_total > 5000.0
         assert stock_total <= 9500.0 + 10
 
-    def test_yellow_15pct_cash(self, lxt_universe):
+    def test_yellow_7pct_cash(self, lxt_universe):
         targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.YELLOW, 10000.0)
-        stock_total = sum(v for k, v in targets.items() if k != _HEDGE_TICKER)
-        assert stock_total <= 8500.0 + 10  # 85% invested
+        stock_total = sum(v for k, v in targets.items() if k not in (_HEDGE_TICKER, _CASH_TICKER))
+        assert stock_total <= 9300.0 + 10  # 93% invested (7% XEON)
 
-    def test_orange_30pct_cash(self, lxt_universe):
+    def test_orange_10pct_cash(self, lxt_universe):
         targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.ORANGE, 10000.0)
-        stock_total = sum(v for k, v in targets.items() if k != _HEDGE_TICKER)
-        # 30% cash floor + 6% hedge → stock total should be ≤ 64%
-        assert stock_total <= 7000.0 + 10
+        stock_total = sum(v for k, v in targets.items() if k not in (_HEDGE_TICKER, _CASH_TICKER))
+        # 10% cash floor + 6% hedge = 16% reserved → stocks ≤ 84%
+        assert stock_total <= 8400.0 + 10
 
-    def test_red_70pct_cash(self, lxt_universe):
+    def test_red_18pct_cash(self, lxt_universe):
         targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.RED, 10000.0)
-        stock_total = sum(v for k, v in targets.items() if k != _HEDGE_TICKER)
-        # 70% cash floor (bunker) → stock total should be ≤ 30%
-        assert stock_total <= 3000.0 + 10
+        stock_total = sum(v for k, v in targets.items() if k not in (_HEDGE_TICKER, _CASH_TICKER))
+        # 18% cash floor + 10% hedge = 28% reserved → stocks ≤ 72%
+        assert stock_total <= 7200.0 + 10
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -200,8 +201,9 @@ class TestEligibilityFilter:
     def test_green_all_tiers(self):
         assert _eligible_tiers(SignalColor.GREEN) == {Tier.T1, Tier.T2, Tier.T3, Tier.T4}
 
-    def test_yellow_all_tiers(self):
-        assert _eligible_tiers(SignalColor.YELLOW) == {Tier.T1, Tier.T2, Tier.T3, Tier.T4}
+    def test_yellow_t1_t2_only(self):
+        """YELLOW → T3/T4 frozen; only T1/T2 eligible for new allocation."""
+        assert _eligible_tiers(SignalColor.YELLOW) == {Tier.T1, Tier.T2}
 
     def test_orange_t1_t2_only(self):
         assert _eligible_tiers(SignalColor.ORANGE) == {Tier.T1, Tier.T2}
@@ -239,10 +241,10 @@ class TestHedgeProtocol:
         targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.ORANGE, 10000.0)
         assert targets[_HEDGE_TICKER] == pytest.approx(600.0, abs=1)
 
-    def test_red_no_hedge(self, lxt_universe):
-        """RED = full liquidation mode → 0% hedge."""
+    def test_red_deploys_hedge(self, lxt_universe):
+        """RED → 10% crisis hedge escalation."""
         targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.RED, 10000.0)
-        assert targets[_HEDGE_TICKER] == 0.0
+        assert targets[_HEDGE_TICKER] == pytest.approx(1000.0, abs=1)
 
     def test_green_no_hedge(self, lxt_universe):
         """GREEN → hedge unwound / not deployed."""
@@ -304,15 +306,15 @@ class TestSuggestions:
         t4_buys = [s for s in suggestions if s["ticker"] == "IONQ" and s["action"] == "BUY"]
         assert len(t4_buys) == 0
 
-    def test_red_exits_t3_t4(self, mock_portfolio_config, invested_portfolio, small_universe):
-        """RED → T3/T4 positions should be sold."""
+    def test_red_freezes_t3_t4(self, mock_portfolio_config, invested_portfolio, small_universe):
+        """RED → T3/T4 positions frozen at current value (HOLD, not SELL)."""
         sig = make_composite(overall=SignalColor.RED)
         suggestions = calculate_suggestions(invested_portfolio, small_universe, sig)
 
         ionq_sells = [s for s in suggestions if s["ticker"] == "IONQ" and s["action"] == "SELL"]
         pltr_sells = [s for s in suggestions if s["ticker"] == "PLTR" and s["action"] == "SELL"]
-        assert len(ionq_sells) >= 1
-        assert len(pltr_sells) >= 1
+        assert len(ionq_sells) == 0, "T4 frozen — should not generate SELL"
+        assert len(pltr_sells) == 0, "T3 frozen — should not generate SELL"
 
     def test_priority_ordering(self, mock_portfolio_config, invested_portfolio, small_universe):
         """Lower priority number = first in list."""
@@ -326,14 +328,15 @@ class TestSuggestions:
 class TestPiesAllocation:
     """Trading 212 Pies allocation output."""
 
-    def test_cash_slice_exists(self, mock_portfolio_config, small_universe):
-        """Allocation always includes a CASH entry."""
+    def test_xeon_cash_slice_exists(self, mock_portfolio_config, small_universe):
+        """Allocation always includes an XEON.DE cash parking entry."""
         pf = Portfolio(total_capital_eur=3100.0, cash_eur=3100.0)
         sig = make_composite(overall=SignalColor.GREEN)
         allocs = calculate_pies_allocation(pf, small_universe, sig)
 
-        cash = [a for a in allocs if a["ticker"] == "CASH"]
-        assert len(cash) == 1
+        xeon = [a for a in allocs if a["ticker"] == _CASH_TICKER]
+        assert len(xeon) == 1
+        assert xeon[0]["target_pct"] > 0  # 5% cash floor at GREEN
 
     def test_red_exits_have_zero_pct(self, mock_portfolio_config, small_universe):
         """RED signal → T4 stocks get 0% target."""
@@ -350,10 +353,11 @@ class TestPiesAllocation:
 
         green_sig = make_composite(overall=SignalColor.GREEN)
         green_allocs = calculate_pies_allocation(pf, small_universe, green_sig)
-        green_invested = sum(a["target_pct"] for a in green_allocs if a["ticker"] != "CASH")
+        _instruments = {"CASH", _HEDGE_TICKER, _CASH_TICKER}
+        green_invested = sum(a["target_pct"] for a in green_allocs if a["ticker"] not in _instruments)
 
         red_sig = make_composite(overall=SignalColor.RED)
         red_allocs = calculate_pies_allocation(pf, small_universe, red_sig)
-        red_invested = sum(a["target_pct"] for a in red_allocs if a["ticker"] != "CASH")
+        red_invested = sum(a["target_pct"] for a in red_allocs if a["ticker"] not in _instruments)
 
         assert green_invested > red_invested
