@@ -12,11 +12,14 @@ instead of spawning a duplicate API call chain.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
 
 from rewired import get_data_dir
+
+logger = logging.getLogger(__name__)
 
 # Cache TTL in seconds
 _SIGNAL_TTL = 300       # 5 minutes
@@ -26,6 +29,41 @@ _PIES_TTL = 300         # 5 minutes
 
 _HEATMAP_TTL = 60      # 1 minute — fast enough for live heatmap refresh
 _REGIME_TTL = 120      # 2 minutes — regime state from JSON file
+
+
+def _ttl_is_fresh(timestamp: float, ttl_seconds: float) -> bool:
+    return timestamp > 0 and (time.time() - timestamp < ttl_seconds)
+
+
+def _cache_age(timestamp: float) -> float:
+    if timestamp <= 0:
+        return 0.0
+    return time.time() - timestamp
+
+
+def _log_fetch_start(name: str) -> float:
+    started = time.perf_counter()
+    logger.info("Fetching %s data", name)
+    return started
+
+
+def _log_fetch_success(name: str, started: float, detail: str = "") -> None:
+    suffix = f" ({detail})" if detail else ""
+    logger.info(
+        "Fetched %s data in %.2fs%s",
+        name,
+        time.perf_counter() - started,
+        suffix,
+    )
+
+
+def _log_fetch_failure(name: str, started: float, exc: Exception) -> None:
+    logger.warning(
+        "Failed to fetch %s data after %.2fs: %s",
+        name,
+        time.perf_counter() - started,
+        exc,
+    )
 
 
 @dataclass
@@ -105,53 +143,71 @@ class DashboardState:
     _regime_status: DataStatus = field(default_factory=DataStatus)
     _regime_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
+    _pie_detail_cache: dict = field(default_factory=dict, repr=False)
+    _pie_detail_ts: float = 0
+    _pie_detail_status: DataStatus = field(default_factory=DataStatus)
+    _pie_detail_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
+
     def get_signals(self):
         """Get signals, refreshing if stale.
 
         Uses a non-blocking lock so concurrent callers return the cached
         value instead of spawning duplicate ``compute_signals()`` chains.
         """
-        if self._signal_cache and (time.time() - self._signal_ts < _SIGNAL_TTL):
+        if self._signal_cache and _ttl_is_fresh(self._signal_ts, _SIGNAL_TTL):
+            logger.debug("Using cached signals data (age %.1fs)", _cache_age(self._signal_ts))
             return self._signal_cache
         if not self._signal_lock.acquire(blocking=False):
+            logger.debug("Signals fetch already in progress; returning cached data")
             return self._signal_cache
+        started = _log_fetch_start("signals")
         try:
             from rewired.signals.engine import compute_signals
             self._signal_cache = compute_signals()
             self._signal_ts = time.time()
             self._signal_status.mark_success()
+            overall = getattr(getattr(self._signal_cache, "overall_color", None), "value", "unknown")
+            _log_fetch_success("signals", started, f"overall={overall}")
         except Exception as e:
             self._signal_status.mark_error(str(e))
+            _log_fetch_failure("signals", started, e)
         finally:
             self._signal_lock.release()
         return self._signal_cache
 
     def get_portfolio(self):
-        """Get portfolio with refreshed prices."""
-        if self._portfolio_cache and (time.time() - self._portfolio_ts < _PORTFOLIO_TTL):
+        """Get portfolio from live T212 broker data.  No local fallback."""
+        if self._portfolio_cache and _ttl_is_fresh(self._portfolio_ts, _PORTFOLIO_TTL):
+            logger.debug("Using cached portfolio data (age %.1fs)", _cache_age(self._portfolio_ts))
             return self._portfolio_cache
         if not self._portfolio_lock.acquire(blocking=False):
+            logger.debug("Portfolio fetch already in progress; returning cached data")
             return self._portfolio_cache
+        started = _log_fetch_start("portfolio")
         try:
-            from rewired.portfolio.manager import load_portfolio, refresh_prices
-            pf = load_portfolio()
-            if pf.positions:
-                refresh_prices(pf)
+            from rewired.data.broker import get_portfolio
+            pf = get_portfolio()
             self._portfolio_cache = pf
             self._portfolio_ts = time.time()
             self._portfolio_status.mark_success()
+            positions = len(pf.positions) if pf and pf.positions else 0
+            _log_fetch_success("portfolio", started, f"positions={positions}")
         except Exception as e:
             self._portfolio_status.mark_error(str(e))
+            _log_fetch_failure("portfolio", started, e)
         finally:
             self._portfolio_lock.release()
         return self._portfolio_cache
 
     def get_pies(self) -> list[dict]:
         """Get Pies allocation."""
-        if self._pies_cache and (time.time() - self._pies_ts < _PIES_TTL):
+        if self._pies_cache and _ttl_is_fresh(self._pies_ts, _PIES_TTL):
+            logger.debug("Using cached pies data (age %.1fs)", _cache_age(self._pies_ts))
             return self._pies_cache
         if not self._pies_lock.acquire(blocking=False):
+            logger.debug("Pies fetch already in progress; returning cached data")
             return self._pies_cache
+        started = _log_fetch_start("pies")
         try:
             from rewired.portfolio.sizing import calculate_pies_allocation
             sig = self.get_signals()
@@ -161,18 +217,28 @@ class DashboardState:
                 self._pies_cache = calculate_pies_allocation(pf, uni, sig)
                 self._pies_ts = time.time()
                 self._pies_status.mark_success()
+                _log_fetch_success("pies", started, f"rows={len(self._pies_cache)}")
+            else:
+                logger.info("Skipped pies fetch because prerequisite data is missing")
         except Exception as e:
             self._pies_status.mark_error(str(e))
+            _log_fetch_failure("pies", started, e)
         finally:
             self._pies_lock.release()
         return self._pies_cache
 
     def get_suggestions(self) -> list[dict]:
         """Get sizing suggestions."""
-        if self._suggestions_cache and (time.time() - self._suggestions_ts < _PIES_TTL):
+        if self._suggestions_cache and _ttl_is_fresh(self._suggestions_ts, _PIES_TTL):
+            logger.debug(
+                "Using cached suggestions data (age %.1fs)",
+                _cache_age(self._suggestions_ts),
+            )
             return self._suggestions_cache
         if not self._suggestions_lock.acquire(blocking=False):
+            logger.debug("Suggestions fetch already in progress; returning cached data")
             return self._suggestions_cache
+        started = _log_fetch_start("suggestions")
         try:
             from rewired.portfolio.sizing import calculate_suggestions
             sig = self.get_signals()
@@ -182,8 +248,12 @@ class DashboardState:
                 self._suggestions_cache = calculate_suggestions(pf, uni, sig)
                 self._suggestions_ts = time.time()
                 self._suggestions_status.mark_success()
+                _log_fetch_success("suggestions", started, f"rows={len(self._suggestions_cache)}")
+            else:
+                logger.info("Skipped suggestions fetch because prerequisite data is missing")
         except Exception as e:
             self._suggestions_status.mark_error(str(e))
+            _log_fetch_failure("suggestions", started, e)
         finally:
             self._suggestions_lock.release()
         return self._suggestions_cache
@@ -202,15 +272,21 @@ class DashboardState:
     def get_universe(self):
         """Get the stock universe (static, cached permanently)."""
         if self._universe_cache is not None:
+            logger.debug("Using cached universe data")
             return self._universe_cache
         if not self._universe_lock.acquire(blocking=False):
+            logger.debug("Universe fetch already in progress; returning cached data")
             return self._universe_cache
+        started = _log_fetch_start("universe")
         try:
             from rewired.models.universe import load_universe
             self._universe_cache = load_universe()
             self._universe_status.mark_success()
+            count = len(getattr(self._universe_cache, "stocks", [])) if self._universe_cache else 0
+            _log_fetch_success("universe", started, f"stocks={count}")
         except Exception as e:
             self._universe_status.mark_error(str(e))
+            _log_fetch_failure("universe", started, e)
         finally:
             self._universe_lock.release()
         return self._universe_cache
@@ -219,22 +295,27 @@ class DashboardState:
         """Get enriched heatmap data: prices, portfolio values, daily changes.
 
         Returns a dict keyed by ``(layer_int, tier_int)`` → list of dicts
-        with keys: ticker, name, price_eur, portfolio_value_eur, weight_pct,
+        with keys: ticker, name, price_usd (native instrument currency for
+        display), price_eur, portfolio_value_eur, weight_pct,
         daily_change_pct, max_weight_pct.
         """
-        if self._heatmap_cache and (time.time() - self._heatmap_ts < _HEATMAP_TTL):
+        if self._heatmap_cache and _ttl_is_fresh(self._heatmap_ts, _HEATMAP_TTL):
+            logger.debug("Using cached heatmap data (age %.1fs)", _cache_age(self._heatmap_ts))
             return self._heatmap_cache
         if not self._heatmap_lock.acquire(blocking=False):
+            logger.debug("Heatmap fetch already in progress; returning cached data")
             return self._heatmap_cache
+        started = _log_fetch_start("heatmap")
         try:
             uni = self.get_universe()
             pf = self.get_portfolio()
             if not uni:
+                logger.info("Skipped heatmap fetch because universe data is unavailable")
                 return self._heatmap_cache
 
             all_tickers = uni.tickers
-            from rewired.data.prices import get_current_prices_eur, get_daily_changes
-            prices_eur = get_current_prices_eur(all_tickers) if all_tickers else {}
+            from rewired.data.prices import get_current_prices, get_daily_changes
+            prices_usd = get_current_prices(all_tickers) if all_tickers else {}
             daily_changes = get_daily_changes(all_tickers) if all_tickers else {}
 
             result: dict[tuple[int, int], list[dict]] = {}
@@ -244,7 +325,8 @@ class DashboardState:
                 entry = {
                     "ticker": stock.ticker,
                     "name": stock.name,
-                    "price_eur": round(prices_eur.get(stock.ticker, 0.0), 2),
+                    "price_usd": round(prices_usd.get(stock.ticker, 0.0), 2),
+                    "price_eur": round(pos.current_price_eur, 2) if pos else 0.0,
                     "portfolio_value_eur": round(pos.market_value_eur, 2) if pos else 0.0,
                     "weight_pct": round(pos.weight_pct, 1) if pos else 0.0,
                     "daily_change_pct": daily_changes.get(stock.ticker, 0.0),
@@ -255,8 +337,11 @@ class DashboardState:
             self._heatmap_cache = result
             self._heatmap_ts = time.time()
             self._heatmap_status.mark_success()
+            cells = sum(len(items) for items in result.values())
+            _log_fetch_success("heatmap", started, f"cells={cells}")
         except Exception as e:
             self._heatmap_status.mark_error(str(e))
+            _log_fetch_failure("heatmap", started, e)
         finally:
             self._heatmap_lock.release()
         return self._heatmap_cache
@@ -278,10 +363,13 @@ class DashboardState:
 
         Returns a RegimeState instance or None.
         """
-        if self._regime_cache and (time.time() - self._regime_ts < _REGIME_TTL):
+        if self._regime_cache and _ttl_is_fresh(self._regime_ts, _REGIME_TTL):
+            logger.debug("Using cached regime data (age %.1fs)", _cache_age(self._regime_ts))
             return self._regime_cache
         if not self._regime_lock.acquire(blocking=False):
+            logger.debug("Regime fetch already in progress; returning cached data")
             return self._regime_cache
+        started = _log_fetch_start("regime")
         try:
             regime_path = get_data_dir() / "regime_state.json"
             if regime_path.exists():
@@ -291,8 +379,11 @@ class DashboardState:
                 self._regime_cache = RegimeState.model_validate(data)
             self._regime_ts = time.time()
             self._regime_status.mark_success()
+            current = getattr(getattr(self._regime_cache, "current_regime", None), "value", "none")
+            _log_fetch_success("regime", started, f"current={current}")
         except Exception as e:
             self._regime_status.mark_error(str(e))
+            _log_fetch_failure("regime", started, e)
         finally:
             self._regime_lock.release()
         return self._regime_cache

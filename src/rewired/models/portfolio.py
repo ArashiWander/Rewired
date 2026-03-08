@@ -1,18 +1,18 @@
-"""Portfolio models: Position, Transaction, Portfolio."""
+"""Portfolio models: Position, Portfolio.
+
+Portfolio data comes exclusively from the Trading 212 broker API
+(``data/broker.py``).  There is no local JSON persistence.
+"""
 
 from __future__ import annotations
 
-import uuid
-from datetime import date as _date, datetime
-from typing import Literal
+from datetime import datetime
 
-from pydantic import BaseModel, Field
-
-from rewired.models.signals import SignalColor
+from pydantic import BaseModel
 
 
 class Position(BaseModel):
-    """A current holding."""
+    """A current holding sourced from the T212 broker API."""
     ticker: str
     shares: float
     avg_cost_eur: float
@@ -22,25 +22,23 @@ class Position(BaseModel):
     weight_pct: float = 0.0
     last_updated: datetime | None = None
 
+    # Raw instrument-currency prices from T212 (USD for US stocks, GBP for LSE, etc.)
+    current_price_usd: float = 0.0
+    avg_cost_usd: float = 0.0
 
-class Transaction(BaseModel):
-    """A recorded buy/sell/deposit/withdrawal."""
-    id: str = Field(default_factory=lambda: uuid.uuid4().hex[:12])
-    ticker: str = ""
-    action: Literal["BUY", "SELL", "DEPOSIT", "WITHDRAW"] = "BUY"
-    shares: float = 0.0
-    price_eur: float = 0.0
-    date: _date = Field(default_factory=_date.today)
-    signal_color_at_time: SignalColor | None = None
-    notes: str = ""
+    # Pie constituent data from T212 positions endpoint
+    quantity_in_pies: float = 0.0
+    quantity_free: float = 0.0
 
 
 class Portfolio(BaseModel):
-    """Full portfolio state."""
-    total_capital_eur: float = 3100.0
-    cash_eur: float = 3100.0
+    """Live portfolio state from T212.
+
+    ``total_value_eur`` is a stored field (from T212 account summary)
+    rather than computed, because T212 is the authoritative source.
+    """
+    cash_eur: float = 0.0
     positions: dict[str, Position] = {}
-    transactions: list[Transaction] = []
     last_updated: datetime | None = None
 
     @property

@@ -161,10 +161,10 @@ class TestSentimentRules:
         assert color == SignalColor.GREEN
         assert "contango" in explanation.lower() or "Stable" in explanation
 
-    def test_green_vix_just_below_18(self):
-        """VIX = 17.9 with contango → GREEN."""
+    def test_green_vxn_just_below_18(self):
+        """VXN = 17.9 with VIX contango → GREEN."""
         readings = [
-            make_reading("VIX", 17.9, metadata={"ma5_above_ma20": False}),
+            make_reading("VXN Level & Velocity", 17.9, metadata={"ma5_above_ma20": False}),
             make_reading("VIX Term Structure", 1.5),
         ]
         color, _ = evaluate_sentiment_rules(readings)
@@ -177,28 +177,28 @@ class TestSentimentRules:
         assert color == SignalColor.RED
         assert "crisis" in explanation.lower() or "backwardation" in explanation.lower()
 
-    def test_red_vix_at_35_backwardation(self):
-        """VIX exactly at 35 (not >) → should NOT be RED."""
+    def test_red_vxn_at_35_backwardation(self):
+        """VXN exactly at 35 (not >) → should NOT be RED."""
         readings = [
-            make_reading("VIX", 35.0, metadata={"ma5_above_ma20": True}),
+            make_reading("VXN Level & Velocity", 35.0, metadata={"ma5_above_ma20": True}),
             make_reading("VIX Term Structure", -2.0),
         ]
         color, _ = evaluate_sentiment_rules(readings)
         assert color != SignalColor.RED  # > 35 not >= 35
 
-    def test_red_vix_35_1_backwardation(self):
-        """VIX = 35.1 with backwardation → RED."""
+    def test_red_vxn_35_1_backwardation(self):
+        """VXN = 35.1 with VIX backwardation → RED."""
         readings = [
-            make_reading("VIX", 35.1, metadata={"ma5_above_ma20": True}),
+            make_reading("VXN Level & Velocity", 35.1, metadata={"ma5_above_ma20": True}),
             make_reading("VIX Term Structure", -1.0),
         ]
         color, _ = evaluate_sentiment_rules(readings)
         assert color == SignalColor.RED
 
     def test_red_requires_backwardation(self):
-        """VIX > 35 but contango → should be ORANGE not RED."""
+        """VXN > 35 but VIX contango → should be ORANGE not RED."""
         readings = [
-            make_reading("VIX", 38.0, metadata={"ma5_above_ma20": True}),
+            make_reading("VXN Level & Velocity", 38.0, metadata={"ma5_above_ma20": True}),
             make_reading("VIX Term Structure", 1.0),  # contango
         ]
         color, _ = evaluate_sentiment_rules(readings)
@@ -210,12 +210,12 @@ class TestSentimentRules:
     def test_orange_deteriorating(self, sentiment_orange_readings):
         color, explanation = evaluate_sentiment_rules(sentiment_orange_readings)
         assert color == SignalColor.ORANGE
-        assert "Deteriorating" in explanation or "VIX" in explanation
+        assert "Deteriorating" in explanation or "VXN" in explanation
 
-    def test_orange_vix_exactly_25(self):
-        """VIX exactly at 25 → NOT ORANGE (> 25 required)."""
+    def test_orange_vxn_exactly_25(self):
+        """VXN exactly at 25 → NOT ORANGE (> 25 required)."""
         readings = [
-            make_reading("VIX", 25.0, metadata={"ma5_above_ma20": True}),
+            make_reading("VXN Level & Velocity", 25.0, metadata={"ma5_above_ma20": True}),
             make_reading("VIX Term Structure", 0.5),
         ]
         color, _ = evaluate_sentiment_rules(readings)
@@ -228,19 +228,19 @@ class TestSentimentRules:
         assert color == SignalColor.YELLOW
         assert "Divergence" in explanation or "range" in explanation
 
-    def test_yellow_vix_exactly_18(self):
-        """VIX exactly at 18 → YELLOW (18-25 range includes 18)."""
+    def test_yellow_vxn_exactly_18(self):
+        """VXN exactly at 18 → YELLOW (18-25 range includes 18)."""
         readings = [
-            make_reading("VIX", 18.0, metadata={"ma5_above_ma20": False}),
+            make_reading("VXN Level & Velocity", 18.0, metadata={"ma5_above_ma20": False}),
             make_reading("VIX Term Structure", 1.0),
         ]
         color, _ = evaluate_sentiment_rules(readings)
         assert color == SignalColor.YELLOW
 
-    def test_yellow_vix_exactly_25_no_ma_crossover(self):
-        """VIX = 25 without MA crossover → YELLOW (in 18-25 range)."""
+    def test_yellow_vxn_exactly_25_no_ma_crossover(self):
+        """VXN = 25 without MA crossover → YELLOW (in 18-25 range)."""
         readings = [
-            make_reading("VIX", 25.0, metadata={"ma5_above_ma20": False}),
+            make_reading("VXN Level & Velocity", 25.0, metadata={"ma5_above_ma20": False}),
             make_reading("VIX Term Structure", 0.5),
         ]
         color, _ = evaluate_sentiment_rules(readings)
@@ -248,14 +248,50 @@ class TestSentimentRules:
 
     # ── Missing data ─────────────────────────────────────────────────
 
-    def test_missing_vix(self):
-        """No VIX data → defaults to ORANGE."""
+    def test_missing_vxn(self):
+        """No VXN data → defaults to ORANGE."""
         readings = [
             make_reading("VIX Term Structure", 1.0),
         ]
         color, explanation = evaluate_sentiment_rules(readings)
         assert color == SignalColor.ORANGE
         assert "DATA_MISSING" in explanation
+
+    # ── Velocity gate ─────────────────────────────────────────
+
+    def test_velocity_spike_forces_orange(self):
+        """VXN 22 (>18) with 25% 3-day spike → ORANGE velocity gate."""
+        readings = [
+            make_reading("VXN Level & Velocity", 22.0, metadata={
+                "ma5_above_ma20": False, "velocity_3d_pct": 25.0,
+            }),
+            make_reading("VIX Term Structure", 1.5),
+        ]
+        color, explanation = evaluate_sentiment_rules(readings)
+        assert color == SignalColor.ORANGE
+        assert "Velocity spike" in explanation
+
+    def test_velocity_spike_below_min_absolute_no_trigger(self):
+        """VXN 15 (<18) with 25% spike → velocity gate does NOT fire."""
+        readings = [
+            make_reading("VXN Level & Velocity", 15.0, metadata={
+                "ma5_above_ma20": False, "velocity_3d_pct": 25.0,
+            }),
+            make_reading("VIX Term Structure", 2.5),
+        ]
+        color, _ = evaluate_sentiment_rules(readings)
+        assert color == SignalColor.GREEN  # VXN < 18 + contango
+
+    def test_velocity_below_threshold_no_trigger(self):
+        """VXN 22 with 10% spike (< 20% threshold) → normal YELLOW."""
+        readings = [
+            make_reading("VXN Level & Velocity", 22.0, metadata={
+                "ma5_above_ma20": False, "velocity_3d_pct": 10.0,
+            }),
+            make_reading("VIX Term Structure", 1.0),
+        ]
+        color, _ = evaluate_sentiment_rules(readings)
+        assert color == SignalColor.YELLOW  # 18-25 range
 
 
 # ═════════════════════════════════════════════════════════════════════════

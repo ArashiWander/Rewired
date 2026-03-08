@@ -129,7 +129,8 @@ def _build_heatmap_cells(universe, heatmap_data: dict | None):
             if not stocks and universe:
                 raw = universe.get_by_coordinate(lyr, tier_e)
                 stocks = [{"ticker": s.ticker, "name": s.name,
-                           "price_eur": 0.0, "portfolio_value_eur": 0.0,
+                           "price_usd": 0.0, "price_eur": 0.0,
+                           "portfolio_value_eur": 0.0,
                            "weight_pct": 0.0, "daily_change_pct": 0.0,
                            "max_weight_pct": s.max_weight_pct} for s in raw]
 
@@ -145,7 +146,7 @@ def _build_heatmap_cells(universe, heatmap_data: dict | None):
             _cell_meta[cell_key] = [
                 {
                     "t": s.get("ticker", "?"),
-                    "p": round(s.get("price_eur", 0), 2),
+                    "p": round(s.get("price_usd", 0), 2),
                     "v": round(s.get("portfolio_value_eur", 0), 2),
                     "c": round(s.get("daily_change_pct", 0), 2),
                     "w": round(s.get("weight_pct", 0), 1),
@@ -165,18 +166,18 @@ def _build_heatmap_cells(universe, heatmap_data: dict | None):
                 # Show every ticker with price + daily change
                 parts: list[str] = []
                 for s in sorted_stocks:
-                    p = s.get("price_eur", 0)
+                    p = s.get("price_usd", 0)
                     chg = s.get("daily_change_pct", 0)
                     chg_s = f" {chg:+.1f}%" if p > 0 else ""
-                    price_s = f" \u20ac{p:,.0f}" if p else ""
+                    price_s = f" ${p:,.0f}" if p else ""
                     parts.append(f"{s['ticker']}{price_s}{chg_s}")
                 label = "\n".join(parts)
             else:
                 # 5+ stocks: top 3 compact + badge
                 parts = []
                 for s in sorted_stocks[:3]:
-                    p = s.get("price_eur", 0)
-                    price_s = f" \u20ac{p:,.0f}" if p else ""
+                    p = s.get("price_usd", 0)
+                    price_s = f" ${p:,.0f}" if p else ""
                     parts.append(f"{s['ticker']}{price_s}")
                 label = "\n".join(parts) + f"\n+{count - 3} more \u25b8"
 
@@ -214,8 +215,8 @@ def _build_heatmap_cells(universe, heatmap_data: dict | None):
         "return hdr+items.map(function(s){"
         "var cc=s.c>=0?'#22c55e':'#ef4444';"
         "var chg=s.p>0?' <span style=\"color:'+cc+';font-weight:600\">'+(s.c>=0?'+':'')+s.c.toFixed(2)+'%</span>':'';"
-        "var pr=s.p>0?'\\u20ac'+s.p.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}):'';"
-        "var vl=s.v>0?' <span style=\"color:#aaa\">(\\u20ac'+s.v.toLocaleString(undefined,{maximumFractionDigits:0})+')</span>':'';"
+        "var pr=s.p>0?'$'+s.p.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}):'';"
+        "var vl=s.v>0?' <span style=\"color:#aaa\">(\u20ac'+s.v.toLocaleString(undefined,{maximumFractionDigits:0})+')</span>':'';"
         "var wt=s.w>0?' <span style=\"color:#888;font-size:11px\">'+s.w.toFixed(1)+'%</span>':'';"
         "return'<b>'+s.t+'</b> '+pr+vl+wt+chg;"
         "}).join('<br/>');"

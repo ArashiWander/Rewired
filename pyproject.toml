@@ -30,6 +30,7 @@ dev = [
 ]
 gui = [
     "nicegui>=2.0",
+    "pandas_market_calendars>=4.0",
 ]
 broker = [
     "ib_insync>=0.9.86",

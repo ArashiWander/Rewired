@@ -122,67 +122,82 @@ def evaluate_macro_rules(readings: list[SignalReading]) -> tuple[SignalColor, st
 def evaluate_sentiment_rules(readings: list[SignalReading]) -> tuple[SignalColor, str]:
     """Evaluate sentiment boolean rules.  Most defensive rule wins.
 
-    RED (1pt):    VIX > 35 AND term structure in severe backwardation.
-    ORANGE (2pt): VIX > 25 AND 5MA > 20MA (expanding volatility trend).
-    YELLOW (3pt): VIX 18-25, market seeking narrative.
-    GREEN (4pt):  VIX < 18 AND term structure in normal contango.
+    Dual Radar:
+      Radar A (VIX/VIX3M): contango/backwardation for liquidity assessment.
+      Radar B (VXN):        tech-sector panic threshold + 3-day velocity.
+
+    RED (1pt):    VXN > 35 AND VIX term structure in severe backwardation.
+    ORANGE (2pt): VXN > 25 AND 5MA > 20MA (expanding volatility trend).
+    YELLOW (3pt): VXN 18-25, market seeking narrative.
+    GREEN (4pt):  VXN < 18 AND VIX term structure in normal contango.
     """
     cfg = _load_signal_config().get("sentiment", {}).get("rules", {})
 
-    vix = _find_reading(readings, "VIX")
+    vxn = _find_reading(readings, "VXN Level & Velocity")
     term_structure = _find_reading(readings, "VIX Term Structure")
 
     # ── Data availability check ───────────────────────────────────────
-    if vix is None:
-        return SignalColor.ORANGE, "DATA_MISSING: VIX data unavailable"
+    if vxn is None:
+        return SignalColor.ORANGE, "DATA_MISSING: VXN data unavailable"
 
-    vix_val = vix.value
+    vxn_val = vxn.value
     # spread = VIX3M - VIX: positive = contango = calm, negative = backwardation = panic
     spread = term_structure.value if term_structure is not None else 0.0
     is_backwardation = term_structure is not None and spread < 0
     is_contango = term_structure is not None and spread > 0
-    ma5_above_ma20 = _get_meta(vix, "ma5_above_ma20", False)
+    ma5_above_ma20 = _get_meta(vxn, "ma5_above_ma20", False)
+    velocity_3d_pct = _get_meta(vxn, "velocity_3d_pct", 0.0) or 0.0
+
+    # ── VELOCITY GATE: 3-day spike → force ORANGE ─────────────────────
+    vel_cfg = _load_signal_config().get("sentiment", {}).get("data_sources", {}).get("velocity", {})
+    spike_threshold = vel_cfg.get("spike_threshold_pct", 20.0)
+    min_absolute = vel_cfg.get("min_absolute", 18)
+    if velocity_3d_pct > spike_threshold and vxn_val > min_absolute:
+        return SignalColor.ORANGE, (
+            f"Velocity spike: VXN surged {velocity_3d_pct:.1f}% in 3 trading days "
+            f"(>{spike_threshold}%) with VXN {vxn_val:.1f} > {min_absolute}"
+        )
 
     # ── RED: Liquidity Crisis ─────────────────────────────────────────
-    red_vix = cfg.get("red", {}).get("vix_above", 35)
-    if vix_val > red_vix and is_backwardation:
+    red_vxn = cfg.get("red", {}).get("vxn_above", 35)
+    if vxn_val > red_vxn and is_backwardation:
         return SignalColor.RED, (
-            f"Liquidity crisis: VIX {vix_val:.1f} > {red_vix} "
+            f"Liquidity crisis: VXN {vxn_val:.1f} > {red_vxn} "
             f"with backwardation (spread: {spread:+.1f})"
         )
 
     # ── ORANGE: Deteriorating ─────────────────────────────────────────
-    orange_vix = cfg.get("orange", {}).get("vix_above", 25)
-    if vix_val > orange_vix and ma5_above_ma20:
+    orange_vxn = cfg.get("orange", {}).get("vxn_above", 25)
+    if vxn_val > orange_vxn and ma5_above_ma20:
         return SignalColor.ORANGE, (
-            f"Deteriorating: VIX {vix_val:.1f} > {orange_vix} "
+            f"Deteriorating: VXN {vxn_val:.1f} > {orange_vxn} "
             f"with 5MA > 20MA (expanding volatility)"
         )
 
-    # ORANGE fallback: VIX > threshold even without trend data
-    if vix_val > orange_vix:
-        return SignalColor.ORANGE, f"Elevated risk: VIX {vix_val:.1f} > {orange_vix}"
+    # ORANGE fallback: VXN > threshold even without trend data
+    if vxn_val > orange_vxn:
+        return SignalColor.ORANGE, f"Elevated risk: VXN {vxn_val:.1f} > {orange_vxn}"
 
     # ── YELLOW: Divergence ────────────────────────────────────────────
-    yellow_low = cfg.get("yellow", {}).get("vix_low", 18)
-    yellow_high = cfg.get("yellow", {}).get("vix_high", 25)
-    if yellow_low <= vix_val <= yellow_high:
+    yellow_low = cfg.get("yellow", {}).get("vxn_low", 18)
+    yellow_high = cfg.get("yellow", {}).get("vxn_high", 25)
+    if yellow_low <= vxn_val <= yellow_high:
         return SignalColor.YELLOW, (
-            f"Divergence: VIX {vix_val:.1f} in {yellow_low}-{yellow_high} range, "
+            f"Divergence: VXN {vxn_val:.1f} in {yellow_low}-{yellow_high} range, "
             f"market seeking direction"
         )
 
     # ── GREEN: Stable / Complacent ────────────────────────────────────
-    green_vix = cfg.get("green", {}).get("vix_below", 18)
-    if vix_val < green_vix and is_contango:
+    green_vxn = cfg.get("green", {}).get("vxn_below", 18)
+    if vxn_val < green_vxn and is_contango:
         return SignalColor.GREEN, (
-            f"Stable/Complacent: VIX {vix_val:.1f} < {green_vix} "
+            f"Stable/Complacent: VXN {vxn_val:.1f} < {green_vxn} "
             f"with contango (spread: {spread:+.1f})"
         )
 
-    # VIX < threshold but no contango confirmation
-    if vix_val < green_vix:
-        return SignalColor.GREEN, f"Low volatility: VIX {vix_val:.1f} < {green_vix}"
+    # VXN < threshold but no contango confirmation
+    if vxn_val < green_vxn:
+        return SignalColor.GREEN, f"Low volatility: VXN {vxn_val:.1f} < {green_vxn}"
 
     return SignalColor.YELLOW, "Mixed sentiment signals"
 

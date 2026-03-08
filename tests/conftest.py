@@ -133,36 +133,36 @@ def macro_yellow_readings() -> list[SignalReading]:
 
 @pytest.fixture()
 def sentiment_green_readings() -> list[SignalReading]:
-    """VIX < 18 AND contango → GREEN."""
+    """VXN < 18 AND VIX contango → GREEN."""
     return [
-        make_reading("VIX", 14.5, metadata={"ma5_above_ma20": False}),
+        make_reading("VXN Level & Velocity", 14.5, metadata={"ma5_above_ma20": False}),
         make_reading("VIX Term Structure", 2.1),  # VIX3M - VIX = positive = contango
     ]
 
 
 @pytest.fixture()
 def sentiment_red_readings() -> list[SignalReading]:
-    """VIX > 35 AND backwardation → RED."""
+    """VXN > 35 AND VIX backwardation → RED."""
     return [
-        make_reading("VIX", 42.0, metadata={"ma5_above_ma20": True}),
+        make_reading("VXN Level & Velocity", 42.0, metadata={"ma5_above_ma20": True}),
         make_reading("VIX Term Structure", -3.5),  # negative = backwardation
     ]
 
 
 @pytest.fixture()
 def sentiment_orange_readings() -> list[SignalReading]:
-    """VIX > 25 AND 5MA > 20MA → ORANGE."""
+    """VXN > 25 AND 5MA > 20MA → ORANGE."""
     return [
-        make_reading("VIX", 28.0, metadata={"ma5_above_ma20": True}),
+        make_reading("VXN Level & Velocity", 28.0, metadata={"ma5_above_ma20": True}),
         make_reading("VIX Term Structure", 0.5),
     ]
 
 
 @pytest.fixture()
 def sentiment_yellow_readings() -> list[SignalReading]:
-    """VIX 18-25 → YELLOW."""
+    """VXN 18-25 → YELLOW."""
     return [
-        make_reading("VIX", 21.0, metadata={"ma5_above_ma20": False}),
+        make_reading("VXN Level & Velocity", 21.0, metadata={"ma5_above_ma20": False}),
         make_reading("VIX Term Structure", 1.0),
     ]
 

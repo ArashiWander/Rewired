@@ -208,6 +208,75 @@ def print_pies_allocation(allocations: list, composite) -> None:
                   f"Net: {net:+,.2f} {EUR}\n")
 
 
+def print_action_instructions(allocations: list, composite) -> None:
+    """Display prominent BUY / SELL / HOLD action instructions.
+
+    This is the primary daily output: what the user must do in T212.
+    """
+    overall = composite.overall_color.value
+    style = SIGNAL_STYLE.get(overall, "")
+    console.print(f"\n[bold]Composite Signal:[/bold] [{style}]{overall.upper()}[/{style}]")
+
+    buys = [a for a in allocations if a.get("action") == "BUY"]
+    sells = [a for a in allocations if a.get("action") == "SELL"]
+    holds = [a for a in allocations if a.get("action") == "HOLD" and a["ticker"] != "CASH"]
+
+    if not buys and not sells:
+        console.print("\n[bold green]NO ACTIONS REQUIRED[/bold green] - portfolio is balanced.\n")
+        return
+
+    table = Table(
+        title="ACTION INSTRUCTIONS",
+        show_lines=True,
+        title_style="bold white on blue",
+    )
+    table.add_column("Action", justify="center", width=6)
+    table.add_column("Ticker", style="bold", width=8)
+    table.add_column("Name", width=20)
+    table.add_column(f"Amount ({EUR})", justify="right", width=14)
+    table.add_column("Current %", justify="right", width=10)
+    table.add_column("Target %", justify="right", width=10)
+
+    for a in sorted(sells, key=lambda x: -abs(x.get("delta_eur", 0))):
+        table.add_row(
+            "[bold red]SELL[/bold red]",
+            a["ticker"],
+            a["name"],
+            f"{abs(a.get('delta_eur', 0)):,.2f} {EUR}",
+            f"{a.get('current_pct', 0):.1f}%",
+            f"{a['target_pct']:.1f}%",
+        )
+
+    for a in sorted(buys, key=lambda x: -abs(x.get("delta_eur", 0))):
+        table.add_row(
+            "[bold green]BUY[/bold green]",
+            a["ticker"],
+            a["name"],
+            f"{abs(a.get('delta_eur', 0)):,.2f} {EUR}",
+            f"{a.get('current_pct', 0):.1f}%",
+            f"{a['target_pct']:.1f}%",
+        )
+
+    for a in holds:
+        table.add_row(
+            "[dim]HOLD[/dim]",
+            a["ticker"],
+            a["name"],
+            f"- {EUR}",
+            f"{a.get('current_pct', 0):.1f}%",
+            f"{a['target_pct']:.1f}%",
+            style="dim",
+        )
+
+    console.print()
+    console.print(table)
+
+    buy_total = sum(abs(a.get("delta_eur", 0)) for a in buys)
+    sell_total = sum(abs(a.get("delta_eur", 0)) for a in sells)
+    console.print(f"\n  [green]Total to buy:  {buy_total:,.2f} {EUR}[/green]")
+    console.print(f"  [red]Total to sell: {sell_total:,.2f} {EUR}[/red]\n")
+
+
 def print_regime_assessment(assessment) -> None:
     """Display the AI market regime assessment."""
     regime_styles = {

@@ -82,6 +82,9 @@ def _build_dashboard() -> None:
             # Signal indicator (updated after data loads)
             signal_indicator_container = ui.row().classes("items-center gap-2")
 
+            # Market status badge
+            market_badge_container = ui.row().classes("items-center gap-2")
+
             # Status badges
             status_badge_container = ui.row().classes("items-center gap-2")
 
@@ -147,12 +150,6 @@ def _build_dashboard() -> None:
             """Force refresh all data and rebuild."""
             updated_label.set_text(t("app.refreshing"))
             dashboard_state.refresh_all()
-            await populate()
-
-        async def refresh_after_trade():
-            """Refresh portfolio-related caches only (skip signal re-fetch)."""
-            updated_label.set_text(t("app.refreshing"))
-            dashboard_state.refresh_portfolio_related()
             await populate()
 
         async def refresh_after_universe_change():
@@ -324,6 +321,14 @@ def _build_dashboard() -> None:
                 components.header_signal_indicator(sig)
             ), "Header indicator", show_error_card=False)
 
+            # Market status badge
+            _render_section(
+                market_badge_container,
+                components.market_status_badge,
+                "Market badge",
+                show_error_card=False,
+            )
+
             # Header status badges
             def _render_status_badges():
                 statuses = dashboard_state.get_all_statuses()
@@ -347,16 +352,13 @@ def _build_dashboard() -> None:
             # ── Actions tab ──────────────────────────────────
             def _render_actions():
                 if sig:
-                    components.actions_logic_explainer(sig)
                     if allocs:
-                        components.pies_allocation_table(allocs, sig)
+                        components.action_instructions_panel(allocs, sig)
                     else:
                         with ui.card().classes("w-full"):
                             ui.label(t("app.pies_unavailable")).classes("text-grey")
-                    components.actions_playbook(sig, suggs or [])
-                    components.suggestions_panel(suggs or [], sig)
+                    components.actions_logic_explainer(sig)
                 else:
-                    components.actions_playbook(None, [])
                     with ui.card().classes("w-full"):
                         ui.label(t("app.signal_unavailable")).classes("text-grey")
 
@@ -389,8 +391,6 @@ def _build_dashboard() -> None:
             # ── Portfolio tab ────────────────────────────────
             def _render_portfolio():
                 components.portfolio_table(pf)
-                components.trade_recording_form(on_trade_recorded=refresh_after_trade)
-                components.transaction_history_table(pf)
                 if uni:
                     components.interactive_universe_panel(
                         on_change=refresh_after_universe_change,
@@ -443,166 +443,6 @@ def _build_dashboard() -> None:
                                 ui.label("No pending upgrade").classes("text-grey")
                             ui.label(f"Last updated: {regime.last_updated}")
 
-                # ── Danger Zone: Factory Reset ───────────────────
-                with ui.card().classes("w-full").style("border:1px solid #ef4444"):
-                    ui.label("Danger Zone").classes("text-bold text-lg text-red")
-                    ui.label(
-                        "Factory reset will purge all portfolio state, signal history, "
-                        "and caches. This action cannot be undone."
-                    ).classes("text-grey text-sm")
-
-                    reset_input = ui.number(
-                        "New capital (EUR)", value=3100.0, min=0.0, format="%.2f",
-                    ).classes("w-48")
-
-                    async def _do_reset():
-                        capital = reset_input.value or 3100.0
-                        from rewired.portfolio.manager import factory_reset
-                        await _run_in_thread(lambda: factory_reset(capital))
-                        dashboard_state.refresh_portfolio_related()
-                        ui.notify(f"Reset complete. Capital: {capital:.2f} EUR", type="positive")
-
-                    ui.button(
-                        "Factory Reset",
-                        on_click=lambda: confirm_dialog.open(),
-                        color="red",
-                    ).props("outline")
-
-                    with ui.dialog() as confirm_dialog:
-                        with ui.card():
-                            ui.label("Confirm Factory Reset").classes("text-bold text-lg")
-                            ui.label("This will destroy ALL portfolio data. Are you sure?")
-                            with ui.row():
-                                ui.button("Cancel", on_click=confirm_dialog.close)
-
-                                async def _confirm_reset():
-                                    confirm_dialog.close()
-                                    await _do_reset()
-
-                                ui.button(
-                                    "Yes, Reset Everything",
-                                    on_click=_confirm_reset,
-                                    color="red",
-                                )
-
-                # ── Capital Adjustment ────────────────────────────
-                with ui.card().classes("w-full").style("border:1px solid #f59e0b"):
-                    ui.label("Capital Adjustment").classes("text-bold text-lg")
-                    ui.label(
-                        "Inject or withdraw cash without wiping the portfolio."
-                    ).classes("text-grey text-sm")
-
-                    cap_amount = ui.number(
-                        "Amount (EUR)", value=0.0, format="%.2f",
-                    ).classes("w-48")
-                    cap_reason = ui.input("Reason / note").classes("w-64")
-
-                    async def _do_inject():
-                        amt = cap_amount.value or 0.0
-                        if amt <= 0:
-                            ui.notify("Enter a positive amount to inject.", type="warning")
-                            return
-                        from rewired.portfolio.manager import (
-                            load_portfolio, adjust_capital, save_portfolio,
-                        )
-
-                        def _go():
-                            pf = load_portfolio()
-                            adjust_capital(pf, amt, cap_reason.value or "")
-                            save_portfolio(pf)
-                            return pf.cash_eur
-
-                        try:
-                            cash = await _run_in_thread(_go)
-                            dashboard_state.refresh_portfolio_related()
-                            ui.notify(f"Injected {amt:.2f} EUR. Cash: {cash:.2f} EUR", type="positive")
-                        except ValueError as e:
-                            ui.notify(str(e), type="negative")
-
-                    async def _do_withdraw():
-                        amt = cap_amount.value or 0.0
-                        if amt <= 0:
-                            ui.notify("Enter a positive amount to withdraw.", type="warning")
-                            return
-                        from rewired.portfolio.manager import (
-                            load_portfolio, adjust_capital, save_portfolio,
-                        )
-
-                        def _go():
-                            pf = load_portfolio()
-                            adjust_capital(pf, -amt, cap_reason.value or "")
-                            save_portfolio(pf)
-                            return pf.cash_eur
-
-                        try:
-                            cash = await _run_in_thread(_go)
-                            dashboard_state.refresh_portfolio_related()
-                            ui.notify(f"Withdrew {amt:.2f} EUR. Cash: {cash:.2f} EUR", type="positive")
-                        except ValueError as e:
-                            ui.notify(str(e), type="negative")
-
-                    with ui.row().classes("gap-2"):
-                        ui.button("Inject", on_click=_do_inject, color="green").props("outline")
-                        ui.button("Withdraw", on_click=_do_withdraw, color="orange").props("outline")
-
-                # ── Transaction Management ────────────────────────
-                with ui.card().classes("w-full").style("border:1px solid #ef4444"):
-                    ui.label("Delete Transaction").classes("text-bold text-lg")
-                    ui.label(
-                        "Remove a specific ledger entry. The portfolio will be "
-                        "rebuilt from scratch by replaying all remaining transactions."
-                    ).classes("text-grey text-sm")
-
-                    tx_list_container = ui.column().classes("w-full")
-
-                    async def _refresh_tx_list():
-                        tx_list_container.clear()
-                        from rewired.portfolio.manager import load_portfolio
-                        pf = await _run_in_thread(load_portfolio)
-                        if not pf.transactions:
-                            with tx_list_container:
-                                ui.label("No transactions.").classes("text-grey")
-                            return
-                        with tx_list_container:
-                            for tx in reversed(pf.transactions):
-                                ticker = tx.ticker or "--"
-                                label = (
-                                    f"{tx.date}  {tx.action:<8} {ticker:<8} "
-                                    f"{tx.shares:.4f} x {tx.price_eur:.2f} EUR"
-                                )
-                                with ui.row().classes("items-center gap-2 w-full"):
-                                    ui.label(label).classes("font-mono text-sm flex-grow")
-
-                                    def _make_del(tid: str):
-                                        async def _handler():
-                                            from rewired.portfolio.manager import (
-                                                load_portfolio as _lp,
-                                                delete_transaction as _dt,
-                                                save_portfolio as _sp,
-                                            )
-
-                                            def _go():
-                                                p = _lp()
-                                                ok = _dt(p, tid)
-                                                if ok:
-                                                    _sp(p)
-                                                return ok
-
-                                            ok = await _run_in_thread(_go)
-                                            if ok:
-                                                dashboard_state.refresh_portfolio_related()
-                                                ui.notify("Deleted & replayed.", type="positive")
-                                                await _refresh_tx_list()
-                                            else:
-                                                ui.notify("Transaction not found.", type="negative")
-                                        return _handler
-
-                                    ui.button(icon="delete", on_click=_make_del(tx.id), color="red").props(
-                                        "flat dense round size=sm"
-                                    )
-
-                    ui.button("Load transactions", on_click=_refresh_tx_list).props("flat")
-
             _render_section(
                 monitor_container,
                 _render_monitor,
@@ -613,8 +453,21 @@ def _build_dashboard() -> None:
         # Initial population (slight delay to let the page render)
         ui.timer(0.5, populate, once=True)
 
-        # Auto-refresh every 5 minutes – store reference for cleanup
-        auto_refresh = ui.timer(300, populate)
+        # Auto-refresh — adaptive interval based on market hours.
+        # 5 min when markets open, 30 min when closed.
+        _REFRESH_OPEN = 300    # 5 minutes
+        _REFRESH_CLOSED = 1800  # 30 minutes
+
+        async def _gated_refresh():
+            try:
+                from rewired.data.market_hours import is_any_market_open
+                market_open = is_any_market_open()
+            except Exception:
+                market_open = True
+            auto_refresh.interval = _REFRESH_OPEN if market_open else _REFRESH_CLOSED
+            await populate()
+
+        auto_refresh = ui.timer(_REFRESH_OPEN, _gated_refresh)
 
         # ── Disconnect cleanup ───────────────────────────────────
         def _on_client_disconnect():

@@ -124,15 +124,15 @@ def run_pipeline(
         return load_universe()
 
     def _fetch_portfolio():
-        from rewired.portfolio.manager import load_portfolio
-        return load_portfolio()
+        from rewired.data.broker import get_portfolio
+        return get_portfolio()
 
     fetch_stages = [
         ("Fetch macro (FRED/yfinance)", _fetch_macro, True),
         ("Fetch sentiment (VIX)", _fetch_sentiment, True),
         ("Fetch AI health (Gemini CAPEX)", _fetch_ai_health, True),
         ("Load universe", _fetch_universe, True),
-        ("Load portfolio", _fetch_portfolio, False),
+        ("Load portfolio (T212)", _fetch_portfolio, True),
     ]
 
     fetch_results = _parallel_stages(fetch_stages)
@@ -151,7 +151,7 @@ def run_pipeline(
         data_map[r["name"]] = r.get("result")
 
     universe = data_map.get("Load universe")
-    portfolio = data_map.get("Load portfolio")
+    portfolio = data_map.get("Load portfolio (T212)")
 
     # ── Stage 2: Signal Evaluation (sequential) ──────────────────────
     console.print("[bold]Stage 2:[/bold] Signal evaluation")
@@ -187,9 +187,6 @@ def run_pipeline(
 
         def _compute_sizing():
             from rewired.portfolio.sizing import calculate_suggestions
-            from rewired.portfolio.manager import refresh_prices
-            if portfolio.positions:
-                refresh_prices(portfolio)
             return calculate_suggestions(portfolio, universe, signal)
 
         sizing_stage = _stage("Compute sizing", _compute_sizing)

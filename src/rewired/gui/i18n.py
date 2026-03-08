@@ -187,6 +187,10 @@ _STRINGS: dict[str, dict[Lang, str]] = {
     },
 
     # ── Tab 1: Actions ───────────────────────────────────────────────
+    "actions.instructions_title": {
+        Lang.EN: "T212 Execution Matrix",
+        Lang.ZH: "T212 \u6267\u884c\u77e9\u9635",
+    },
     "actions.how_title": {
         Lang.EN: "How Decisions Are Calculated",
         Lang.ZH: "\u51b3\u7b56\u8ba1\u7b97\u65b9\u6cd5",
@@ -252,8 +256,8 @@ _STRINGS: dict[str, dict[Lang, str]] = {
         Lang.ZH: "**\u6267\u884c\u987a\u5e8f\uff1a** \u6309\u9636\u6bb5\u4f18\u5148\u7ea7\uff081 \u5230 4\uff09\u6267\u884c\u8868\u683c\u64cd\u4f5c\u3002",
     },
     "actions.after_trading": {
-        Lang.EN: "**After trading:** record fills on the **Portfolio** tab, then click **Refresh**.",
-        Lang.ZH: "**\u4ea4\u6613\u540e\uff1a** \u5728 **\u6295\u8d44\u7ec4\u5408** \u9875\u8bb0\u5f55\u6210\u4ea4\uff0c\u7136\u540e\u70b9\u51fb **\u5237\u65b0**\u3002",
+        Lang.EN: "**After trading:** execute these exact deltas in your Trading212 app, then click **Refresh** to pull the new live state.",
+        Lang.ZH: "**\u4ea4\u6613\u540e\uff1a** \u5728 Trading212 \u5e94\u7528\u4e2d\u6267\u884c\u8fd9\u4e9b\u7cbe\u786e\u7684\u5dee\u989d\uff0c\u7136\u540e\u70b9\u51fb **\u5237\u65b0** \u62c9\u53d6\u6700\u65b0\u72b6\u6001\u3002",
     },
     "actions.no_actions": {
         Lang.EN: "No immediate actions are required right now.",
@@ -372,6 +376,10 @@ _STRINGS: dict[str, dict[Lang, str]] = {
     "th.target_pct": {
         Lang.EN: "Target %",
         Lang.ZH: "\u76ee\u6807 %",
+    },
+    "th.current_pct": {
+        Lang.EN: "Current % (Live)",
+        Lang.ZH: "\u5f53\u524d % (\u5b9e\u65f6)",
     },
     "th.target_eur": {
         Lang.EN: "Target EUR",
@@ -1245,7 +1253,45 @@ _STRINGS: dict[str, dict[Lang, str]] = {
         Lang.ZH: "\u4ed3\u4f4d\u8ba1\u7b97\u903b\u8f91",
     },
 
-    # ── Pies execution matrix (D4) ──────────────────────────────────
+    # ── CAPEX Audit Drawer (D5) ─────────────────────────────────────
+    "audit.title": {
+        Lang.EN: "CAPEX Audit Trail",
+        Lang.ZH: "CAPEX \u5ba1\u8ba1\u8ffd\u8e2a",
+    },
+    "audit.tier1_title": {
+        Lang.EN: "Tier 1: Source Material",
+        Lang.ZH: "\u7b2c1\u5c42: \u539f\u59cb\u6570\u636e",
+    },
+    "audit.tier2_title": {
+        Lang.EN: "Tier 2: Extracted Evidence",
+        Lang.ZH: "\u7b2c2\u5c42: \u63d0\u53d6\u8bc1\u636e",
+    },
+    "audit.tier3_title": {
+        Lang.EN: "Tier 3: Mathematical Verdict",
+        Lang.ZH: "\u7b2c3\u5c42: \u6570\u5b66\u5224\u5b9a",
+    },
+    "audit.data_unavailable": {
+        Lang.EN: "Data unavailable",
+        Lang.ZH: "\u6570\u636e\u4e0d\u53ef\u7528",
+    },
+    "audit.trend": {
+        Lang.EN: "Computed Trend",
+        Lang.ZH: "\u8ba1\u7b97\u8d8b\u52bf",
+    },
+    "audit.veto": {
+        Lang.EN: "Veto Triggered",
+        Lang.ZH: "\u5426\u51b3\u89e6\u53d1",
+    },
+    "audit.cached": {
+        Lang.EN: "From Cache",
+        Lang.ZH: "\u6765\u81ea\u7f13\u5b58",
+    },
+    "audit.validated": {
+        Lang.EN: "Schema Validated",
+        Lang.ZH: "\u6a21\u5f0f\u5df2\u9a8c\u8bc1",
+    },
+
+    # u2500\u2500 Pies execution matrix (D4) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     "pies.exec_title": {
         Lang.EN: "Trading 212 Pies \u2014 Execution Sheet",
         Lang.ZH: "Trading 212 Pies \u2014 \u6267\u884c\u6e05\u5355",
@@ -1299,8 +1345,8 @@ _STRINGS: dict[str, dict[Lang, str]] = {
         Lang.ZH: "\u67e5\u770b\u539f\u59cb\u6570\u636e\u4e0e\u903b\u8f91",
     },
     "analysis.raw_data_fetching": {
-        Lang.EN: "Fetching raw FRED / VIX / FMP data\u2026",
-        Lang.ZH: "\u6b63\u5728\u83b7\u53d6 FRED / VIX / FMP \u539f\u59cb\u6570\u636e\u2026",
+        Lang.EN: "Fetching raw FRED / VIX / VXN / FMP data\u2026",
+        Lang.ZH: "\u6b63\u5728\u83b7\u53d6 FRED / VIX / VXN / FMP \u539f\u59cb\u6570\u636e\u2026",
     },
     "analysis.raw_data_fetch_btn": {
         Lang.EN: "Fetch Raw Data",

@@ -27,7 +27,7 @@ from tests.conftest import make_composite
 
 _LXT_CONFIG = {
     "layer_budgets": {"L1": 0.175, "L2": 0.190, "L3": 0.250, "L5": 0.075},
-    "cash_floors": {"green": 0.00, "yellow": 0.05, "orange": 0.12, "red": 0.20},
+    "cash_floors": {"green": 0.05, "yellow": 0.15, "orange": 0.30, "red": 0.70},
     "tier_ratios": {"T1": 0.500, "T2": 0.275, "T3": 0.100, "T4": 0.055},
     "constraints": {
         "max_single_position_pct": 15.0,
@@ -112,30 +112,30 @@ def invested_portfolio() -> Portfolio:
 class TestCashFloor:
     """Cash floor varies by regime color."""
 
-    def test_green_zero_cash_floor(self, lxt_universe):
-        """GREEN cash floor is 0% — all capital is investable (subject to tier ratios)."""
+    def test_green_5pct_cash_floor(self, lxt_universe):
+        """GREEN cash floor is 5% — 95% of capital is investable."""
         targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.GREEN, 10000.0)
         stock_total = sum(v for k, v in targets.items() if k != _HEDGE_TICKER)
-        # Tier ratios sum to 93% (7% structural buffer) and max_weight caps
-        # may further reduce allocation; but allocated total should be >50%
+        # 5% cash floor → max investable = 9500; tier ratios + caps reduce further
         assert stock_total > 5000.0
-        assert stock_total <= 10000.0
+        assert stock_total <= 9500.0 + 10
 
-    def test_yellow_5pct_cash(self, lxt_universe):
+    def test_yellow_15pct_cash(self, lxt_universe):
         targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.YELLOW, 10000.0)
         stock_total = sum(v for k, v in targets.items() if k != _HEDGE_TICKER)
-        assert stock_total <= 9500.0 + 10  # 95% invested
+        assert stock_total <= 8500.0 + 10  # 85% invested
 
-    def test_orange_12pct_cash(self, lxt_universe):
+    def test_orange_30pct_cash(self, lxt_universe):
         targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.ORANGE, 10000.0)
         stock_total = sum(v for k, v in targets.items() if k != _HEDGE_TICKER)
-        # ORANGE also deploys 6% into hedge, so stock total should be ≤ 82%
-        assert stock_total <= 8800.0 + 10
+        # 30% cash floor + 6% hedge → stock total should be ≤ 64%
+        assert stock_total <= 7000.0 + 10
 
-    def test_red_20pct_cash(self, lxt_universe):
+    def test_red_70pct_cash(self, lxt_universe):
         targets = _solve_lxt(_LXT_CONFIG, lxt_universe, SignalColor.RED, 10000.0)
         stock_total = sum(v for k, v in targets.items() if k != _HEDGE_TICKER)
-        assert stock_total <= 8000.0 + 10
+        # 70% cash floor (bunker) → stock total should be ≤ 30%
+        assert stock_total <= 3000.0 + 10
 
 
 # ═════════════════════════════════════════════════════════════════════════

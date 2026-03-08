@@ -1,4 +1,4 @@
-"""EUR/USD conversion via yfinance."""
+"""EUR/USD/GBP conversion via yfinance."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import yfinance as yf
 
 
 _cached_rate: float | None = None
+_cached_gbp_rate: float | None = None
 
 
 def get_eurusd_rate() -> float:
@@ -24,6 +25,21 @@ def get_eurusd_rate() -> float:
     return _cached_rate
 
 
+def get_gbpeur_rate() -> float:
+    """Fetch current GBP/EUR exchange rate. Cached per session."""
+    global _cached_gbp_rate
+    if _cached_gbp_rate is not None:
+        return _cached_gbp_rate
+
+    ticker = yf.Ticker("GBPEUR=X")
+    data = ticker.history(period="1d")
+    if data.empty:
+        _cached_gbp_rate = 1.17
+    else:
+        _cached_gbp_rate = float(data["Close"].iloc[-1])
+    return _cached_gbp_rate
+
+
 def usd_to_eur(usd_amount: float) -> float:
     """Convert USD to EUR."""
     rate = get_eurusd_rate()
@@ -36,7 +52,14 @@ def eur_to_usd(eur_amount: float) -> float:
     return eur_amount * rate
 
 
+def gbp_to_eur(gbp_amount: float) -> float:
+    """Convert GBP to EUR."""
+    rate = get_gbpeur_rate()
+    return gbp_amount * rate
+
+
 def clear_cache() -> None:
-    """Clear cached FX rate (for refreshing)."""
-    global _cached_rate
+    """Clear cached FX rates (for refreshing)."""
+    global _cached_rate, _cached_gbp_rate
     _cached_rate = None
+    _cached_gbp_rate = None

@@ -12,10 +12,10 @@ layer_budgets:
 
 # Cash floor mapping — minimum cash reserve by regime color
 cash_floors:
-  green: 0.00
-  yellow: 0.05
-  orange: 0.12
-  red: 0.20
+  green: 0.05
+  yellow: 0.15
+  orange: 0.30
+  red: 0.70
 
 # Intra-layer tier allocation ratios (must sum < 1.0; remainder = structural buffer)
 tier_ratios:

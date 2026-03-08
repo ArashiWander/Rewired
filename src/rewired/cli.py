@@ -1,9 +1,27 @@
 """Rewired Index CLI entry point."""
 
+import logging
+import os
+
 import click
 from rich.console import Console
 
 console = Console()
+
+
+def _configure_logging(default_level: str = "WARNING") -> None:
+    """Configure root logging once for CLI-driven entrypoints."""
+    level_name = os.environ.get("REWIRED_LOG_LEVEL", default_level).upper()
+    level = getattr(logging, level_name, logging.INFO)
+    root_logger = logging.getLogger()
+
+    if not root_logger.handlers:
+        logging.basicConfig(
+            level=level,
+            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        )
+    else:
+        root_logger.setLevel(level)
 
 
 @click.group()
@@ -38,51 +56,39 @@ def universe(ctx):
         print_universe(uni)
 
 
-@main.group(invoke_without_command=True)
-@click.pass_context
-def portfolio(ctx):
-    """Show or manage portfolio positions."""
-    if ctx.invoked_subcommand is None:
-        from rewired.portfolio.manager import load_portfolio, refresh_prices, save_portfolio
-        from rewired.notifications.console import print_portfolio
+@main.command()
+def portfolio():
+    """Show live portfolio positions from Trading 212."""
+    from rewired.data.broker import get_portfolio
+    from rewired.notifications.console import print_portfolio
+    from rewired.models.signals import BrokerUnavailableError
 
-        pf = load_portfolio()
-        if pf.positions:
-            console.print("[dim]Refreshing prices...[/dim]")
-            refresh_prices(pf)
-            save_portfolio(pf)
-        print_portfolio(pf)
-
-
-@portfolio.command("add")
-@click.option("--ticker", required=True, help="Stock ticker (e.g. NVDA)")
-@click.option("--action", required=True, type=click.Choice(["BUY", "SELL"]))
-@click.option("--shares", required=True, type=float, help="Number of shares")
-@click.option("--price", required=True, type=float, help="Price per share in EUR")
-@click.option("--notes", default="", help="Optional trade notes")
-def portfolio_add(ticker, action, shares, price, notes):
-    """Record a trade executed on Trading 212."""
-    from rewired.portfolio.manager import load_portfolio, record_transaction, save_portfolio
-
-    pf = load_portfolio()
-    record_transaction(pf, ticker=ticker.upper(), action=action, shares=shares, price_eur=price, notes=notes)
-    save_portfolio(pf)
-    console.print(f"[green]Recorded: {action} {shares} x {ticker.upper()} @ {price:.2f} EUR[/green]")
+    try:
+        console.print("[dim]Fetching live portfolio from T212...[/dim]")
+        pf = get_portfolio()
+    except BrokerUnavailableError as e:
+        console.print(f"[bold red]BROKER UNAVAILABLE:[/bold red] {e}")
+        raise SystemExit(1)
+    print_portfolio(pf)
 
 
 @main.command()
 def suggest():
     """Get position sizing suggestions based on current signals."""
+    from rewired.data.broker import get_portfolio
     from rewired.models.universe import load_universe
-    from rewired.portfolio.manager import load_portfolio, refresh_prices
     from rewired.portfolio.sizing import calculate_suggestions
     from rewired.signals.engine import compute_signals
     from rewired.notifications.console import print_suggestions
+    from rewired.models.signals import BrokerUnavailableError
 
+    try:
+        console.print("[dim]Fetching live portfolio from T212...[/dim]")
+        pf = get_portfolio()
+    except BrokerUnavailableError as e:
+        console.print(f"[bold red]BROKER UNAVAILABLE:[/bold red] {e}")
+        raise SystemExit(1)
     uni = load_universe()
-    pf = load_portfolio()
-    if pf.positions:
-        refresh_prices(pf)
     sig = compute_signals()
     suggestions = calculate_suggestions(pf, uni, sig)
     print_suggestions(suggestions, sig)
@@ -91,17 +97,20 @@ def suggest():
 @main.command()
 def pies():
     """Show target Pies allocation for Trading 212."""
+    from rewired.data.broker import get_portfolio
     from rewired.models.universe import load_universe
-    from rewired.portfolio.manager import load_portfolio, refresh_prices
     from rewired.portfolio.sizing import calculate_pies_allocation
     from rewired.signals.engine import compute_signals
     from rewired.notifications.console import print_pies_allocation
+    from rewired.models.signals import BrokerUnavailableError
 
+    try:
+        console.print("[dim]Fetching live portfolio from T212...[/dim]")
+        pf = get_portfolio()
+    except BrokerUnavailableError as e:
+        console.print(f"[bold red]BROKER UNAVAILABLE:[/bold red] {e}")
+        raise SystemExit(1)
     uni = load_universe()
-    pf = load_portfolio()
-    if pf.positions:
-        console.print("[dim]Refreshing prices...[/dim]")
-        refresh_prices(pf)
     sig = compute_signals()
     allocations = calculate_pies_allocation(pf, uni, sig)
     print_pies_allocation(allocations, sig)
@@ -131,8 +140,10 @@ def regime():
 @main.command()
 @click.option("--port", default=8080, help="Port for the web dashboard")
 @click.option("--reload", is_flag=True, help="Enable auto-reload for development")
-def gui(port, reload):
+@click.option("--log-level", default="INFO", help="Logging level for the dashboard process")
+def gui(port, reload, log_level):
     """Launch the Rewired Index web dashboard."""
+    _configure_logging(default_level=log_level)
     try:
         from rewired.gui.app import launch
     except ImportError:
@@ -246,13 +257,16 @@ def execute_cmd(dry_run, live, broker):
     from rewired.signals.engine import compute_signals
     sig = compute_signals()
 
-    console.print("[dim]Step 2: Loading portfolio & universe...[/dim]")
+    console.print("[dim]Step 2: Loading portfolio from T212 & universe...[/dim]")
     from rewired.models.universe import load_universe
-    from rewired.portfolio.manager import load_portfolio, refresh_prices
+    from rewired.data.broker import get_portfolio
+    from rewired.models.signals import BrokerUnavailableError
     uni = load_universe()
-    pf = load_portfolio()
-    if pf.positions:
-        refresh_prices(pf)
+    try:
+        pf = get_portfolio()
+    except BrokerUnavailableError as e:
+        console.print(f"[bold red]BROKER UNAVAILABLE:[/bold red] {e}")
+        raise SystemExit(1)
 
     console.print("[dim]Step 3: Computing sizing suggestions...[/dim]")
     from rewired.portfolio.sizing import calculate_suggestions
@@ -370,99 +384,27 @@ def doctor():
 
 
 @main.command()
-@click.option("--capital", required=True, type=float, help="New total capital in EUR")
-@click.option("--force", is_flag=True, required=True, help="Mandatory safety flag")
-def reset(capital, force):
-    """Factory reset: purge portfolio state and reinitialise the shadow ledger.
+def actions():
+    """Compute action instructions: signals + T212 portfolio + sizing.
 
-    This destroys ALL cached state and resets to a clean starting position.
-    Requires both --capital and --force flags.
+    Primary daily workflow command.  Shows what to BUY/SELL/HOLD.
     """
-    from rewired.portfolio.manager import factory_reset
+    from rewired.data.broker import get_portfolio
+    from rewired.models.universe import load_universe
+    from rewired.portfolio.sizing import calculate_pies_allocation
+    from rewired.signals.engine import compute_signals
+    from rewired.notifications.console import print_action_instructions
+    from rewired.models.signals import BrokerUnavailableError
 
-    factory_reset(capital)
-    console.print(f"\n[bold green]Reset complete.[/bold green] Capital: {capital:.2f} EUR")
-
-
-@main.command()
-@click.option("--inject", type=float, default=None, help="Inject cash (EUR)")
-@click.option("--withdraw", type=float, default=None, help="Withdraw cash (EUR)")
-@click.option("--reason", default="", help="Optional note for the ledger entry")
-def capital(inject, withdraw, reason):
-    """Inject or withdraw cash without wiping the portfolio."""
-    if inject is None and withdraw is None:
-        console.print("[dim]Specify --inject <EUR> or --withdraw <EUR>[/dim]")
-        return
-
-    from rewired.portfolio.manager import load_portfolio, adjust_capital, save_portfolio
-
-    pf = load_portfolio()
-    amount = inject if inject is not None else -withdraw
     try:
-        tx = adjust_capital(pf, amount, reason)
-    except ValueError as e:
-        console.print(f"[red]{e}[/red]")
-        raise SystemExit(1)
-    save_portfolio(pf)
-
-    label = "Injected" if amount > 0 else "Withdrew"
-    console.print(f"[green]{label} {abs(amount):.2f} EUR[/green]  Cash: {pf.cash_eur:.2f} EUR")
-
-
-@main.group(invoke_without_command=True)
-@click.pass_context
-def trades(ctx):
-    """Show or manage the transaction ledger."""
-    if ctx.invoked_subcommand is None:
-        from rewired.portfolio.manager import load_portfolio
-
-        pf = load_portfolio()
-        if not pf.transactions:
-            console.print("[dim]No transactions recorded.[/dim]")
-            return
-        for i, tx in enumerate(pf.transactions):
-            color = "green" if tx.action in ("BUY", "DEPOSIT") else "red"
-            ticker = tx.ticker or "--"
-            console.print(
-                f"  [{color}]{i:>3}[/{color}]  {tx.id}  {tx.date}  {tx.action:<8} "
-                f"{ticker:<8} {tx.shares:>8.4f} x {tx.price_eur:>10.2f} EUR  {tx.notes}"
-            )
-
-
-@trades.command("delete")
-@click.argument("tx_id")
-@click.option("--force", is_flag=True, help="Skip confirmation")
-def trades_delete(tx_id, force):
-    """Delete a transaction by its ID and replay the ledger."""
-    from rewired.portfolio.manager import load_portfolio, delete_transaction, save_portfolio
-
-    pf = load_portfolio()
-    # Allow lookup by index (integer) or by hex id
-    try:
-        idx = int(tx_id)
-        if 0 <= idx < len(pf.transactions):
-            tx_id = pf.transactions[idx].id
-    except ValueError:
-        pass
-
-    # Find the tx for confirmation display
-    match = next((t for t in pf.transactions if t.id == tx_id), None)
-    if match is None:
-        console.print(f"[red]Transaction not found:[/red] {tx_id}")
+        console.print("[dim]Fetching live portfolio from T212...[/dim]")
+        pf = get_portfolio()
+    except BrokerUnavailableError as e:
+        console.print(f"[bold red]BROKER UNAVAILABLE:[/bold red] {e}")
         raise SystemExit(1)
 
-    if not force:
-        console.print(
-            f"Delete: {match.action} {match.ticker or '--'} "
-            f"{match.shares:.4f} x {match.price_eur:.2f}  ({match.date})?"
-        )
-        if not click.confirm("Confirm deletion", default=False):
-            console.print("[dim]Aborted.[/dim]")
-            return
-
-    ok = delete_transaction(pf, tx_id)
-    if ok:
-        save_portfolio(pf)
-        console.print(f"[green]Deleted & replayed.[/green] Cash: {pf.cash_eur:.2f} EUR")
-    else:
-        console.print(f"[red]Transaction not found:[/red] {tx_id}")
+    console.print("[dim]Computing signals...[/dim]")
+    sig = compute_signals()
+    uni = load_universe()
+    allocations = calculate_pies_allocation(pf, uni, sig)
+    print_action_instructions(allocations, sig)

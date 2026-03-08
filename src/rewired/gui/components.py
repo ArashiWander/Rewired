@@ -8,6 +8,7 @@ import re
 from nicegui import ui
 
 from rewired.gui.i18n import t, smart_truncate, layer_name, tier_name
+from rewired.models.signals import SignalCategory
 
 # Color mapping for signal colors
 SIGNAL_COLORS = {
@@ -86,6 +87,30 @@ def header_signal_indicator(composite) -> None:
         )
         ui.label(overall.upper()).style(
             f"color:{hex_color};font-weight:bold;font-size:1.1em"
+        )
+
+
+def market_status_badge() -> None:
+    """Render a market open/closed badge for the header."""
+    try:
+        from rewired.data.market_hours import get_market_status
+        status = get_market_status()
+    except Exception:
+        return
+
+    if status.any_open:
+        label = f"LIVE: {', '.join(status.open_exchanges)}"
+        color = "#22c55e"
+        icon_name = "radio_button_checked"
+    else:
+        label = "Markets Closed"
+        color = "#888"
+        icon_name = "pause_circle_outline"
+
+    with ui.row().classes("items-center gap-1"):
+        ui.icon(icon_name).style(f"color:{color};font-size:16px")
+        ui.label(label).style(
+            f"color:{color};font-size:12px;font-weight:600"
         )
 
 
@@ -248,6 +273,126 @@ def pies_allocation_table(allocations: list[dict], composite) -> None:
                 if reasoning:
                     ui.label(f"{a['ticker']}: {reasoning}").classes("text-caption text-grey")
 
+
+
+def action_instructions_panel(allocations: list[dict], composite) -> None:
+    """Single consolidated T212 Execution Matrix.
+
+    Layout: Signal Header (huge) → Aggregates → Table → After-trading note.
+    """
+    _ACTION_COLORS = {"BUY": "#22c55e", "SELL": "#ef4444", "HOLD": "#888"}
+
+    overall = composite.overall_color.value if composite else "unknown"
+    hex_color = SIGNAL_COLORS.get(overall, "#888")
+
+    # ── 1. Signal Header (huge) ──────────────────────────
+    with ui.card().classes("w-full").style(
+        f"border:2px solid {hex_color};border-radius:12px"
+    ):
+        with ui.row().classes("items-center gap-4"):
+            ui.html(
+                f'<div style="width:48px;height:48px;border-radius:50%;'
+                f'background:{hex_color};box-shadow:0 0 18px {hex_color};'
+                f'border:3px solid white;"></div>'
+            )
+            ui.label(t("actions.instructions_title")).classes("text-h4")
+            ui.label(overall.upper()).style(
+                f"color:{hex_color};font-weight:bold;font-size:1.8em"
+            )
+
+        # Signal posture guidance
+        guidance_keys = {
+            "green": "actions.guidance_green",
+            "yellow": "actions.guidance_yellow",
+            "orange": "actions.guidance_orange",
+            "red": "actions.guidance_red",
+        }
+        guidance = t(guidance_keys.get(overall, "actions.guidance_yellow"))
+        ui.markdown(
+            t("actions.signal_posture", color=overall.upper(), guidance=guidance)
+        ).classes("q-mt-xs")
+
+    # ── 1b. Donut chart (live T212 allocation) ───────────
+    with ui.card().classes("w-full"):
+        ui.label(t("pies.chart_title")).classes("text-h6 q-mb-sm")
+        from rewired.gui.charts import pies_donut_chart
+        pies_donut_chart(allocations)
+
+    buys = [a for a in allocations if a.get("action") == "BUY"]
+    sells = [a for a in allocations if a.get("action") == "SELL"]
+
+    # ── 2. Aggregates ────────────────────────────────────
+    buy_total = sum(abs(a.get("delta_eur", 0)) for a in buys)
+    sell_total = sum(abs(a.get("delta_eur", 0)) for a in sells)
+    net = buy_total - sell_total
+
+    with ui.card().classes("w-full"):
+        with ui.row().classes("justify-around flex-wrap gap-4"):
+            ui.html(
+                f'<span style="color:#22c55e;font-size:1.3em;font-weight:bold">'
+                f'BUY: \u20ac{buy_total:,.2f}</span>'
+            )
+            ui.html(
+                f'<span style="color:#ef4444;font-size:1.3em;font-weight:bold">'
+                f'SELL: \u20ac{sell_total:,.2f}</span>'
+            )
+            ui.label(f"Net: \u20ac{net:+,.2f}").classes("text-bold text-h6")
+        ui.label(
+            t("actions.queue",
+              total=len(buys) + len(sells),
+              sell=len(sells), buy=len(buys))
+        ).classes("text-caption text-grey q-mt-xs")
+
+    # ── 3. T212 Execution Matrix ─────────────────────────
+    with ui.card().classes("w-full"):
+        if not buys and not sells:
+            with ui.row().classes("items-center q-pa-sm"):
+                ui.icon("check_circle", color="green").classes("text-h4")
+                ui.label(t("actions.no_actions")).classes("text-h6 text-green")
+            return
+
+        columns = [
+            {"name": "action", "label": t("th.action"), "field": "action", "align": "center", "sortable": True},
+            {"name": "ticker", "label": t("th.ticker"), "field": "ticker", "align": "left", "sortable": True},
+            {"name": "lxt", "label": "L\u00d7T", "field": "lxt", "align": "center"},
+            {"name": "target_pct", "label": t("th.target_pct"), "field": "target_pct", "align": "right"},
+            {"name": "current_pct", "label": t("th.current_pct"), "field": "current_pct", "align": "right"},
+            {"name": "delta_eur", "label": t("pies.delta_eur"), "field": "delta_eur", "align": "right", "sortable": True},
+            {"name": "reason", "label": t("th.reason"), "field": "reason", "align": "left"},
+        ]
+
+        # Sort: SELL first (by |delta| desc), then BUY (by |delta| desc)
+        _action_order = {"SELL": 0, "BUY": 1, "HOLD": 2}
+        sorted_allocs = sorted(
+            [a for a in allocations if a.get("action") in ("SELL", "BUY")],
+            key=lambda a: (_action_order.get(a.get("action", "HOLD"), 2), -abs(a.get("delta_eur", 0))),
+        )
+
+        rows = []
+        for idx, a in enumerate(sorted_allocs):
+            action = a.get("action", "HOLD")
+            delta = a.get("delta_eur", 0)
+            rows.append({
+                "id": idx,
+                "action": action,
+                "action_hex": _ACTION_COLORS.get(action, "#888"),
+                "ticker": a["ticker"],
+                "lxt": f"{a.get('layer', '?')}/{a.get('tier', '?')}",
+                "target_pct": f"{a.get('target_pct', 0):.1f}%",
+                "current_pct": f"{a.get('current_pct', 0):.1f}%",
+                "delta_eur": f"{'+' if delta >= 0 else ''}\u20ac{delta:,.2f}",
+                "reason": a.get("reasoning", "") or a.get("reason", ""),
+            })
+
+        tbl = ui.table(columns=columns, rows=rows, row_key="id").classes("w-full")
+        _add_color_cell_slot(tbl, "action")
+
+        # ── After-trading note ───────────────────────────
+        ui.markdown(
+            t("actions.execution_order")
+            + "\n"
+            + t("actions.after_trading")
+        ).classes("q-mt-sm text-caption")
 
 
 def actions_logic_explainer(composite) -> None:
@@ -507,6 +652,105 @@ def signal_logic_explainer(composite) -> None:
             ).classes("text-caption text-grey")
 
 
+def _capex_audit_drawer(cat_sig) -> None:
+    """3-tier collapsible accordion for CAPEX pipeline transparency.
+
+    Tier 1 — Source Material: raw financial data input, cache status
+    Tier 2 — Extracted Evidence: per-company LLM extraction table
+    Tier 3 — Mathematical Verdict: computed trend, veto, acceleration
+    """
+    capex_reading = next(
+        (r for r in cat_sig.readings if r.name == "AI CAPEX Health (Agent)"),
+        None,
+    )
+    if capex_reading is None or not capex_reading.metadata:
+        return
+
+    meta = capex_reading.metadata
+    na = t("audit.data_unavailable")
+
+    with ui.expansion(
+        t("audit.title"),
+        icon="policy",
+    ).classes("w-full q-mt-sm").props("dense"):
+
+        # ── Tier 1: Source Material ───────────────────────────────
+        with ui.expansion(
+            t("audit.tier1_title"),
+            icon="source",
+        ).classes("w-full q-mt-xs").props("dense"):
+            ui.label(f"{t('audit.cached')}: {meta.get('cached', na)}").classes("text-caption")
+            ui.label(f"{t('audit.validated')}: {meta.get('validated', na)}").classes("text-caption")
+            raw_fin = meta.get("raw_financial_data", "")
+            if raw_fin:
+                ui.code(
+                    str(raw_fin)[:4000] if len(str(raw_fin)) > 4000 else str(raw_fin),
+                    language="text",
+                ).classes("w-full")
+            else:
+                ui.label(na).classes("text-caption text-grey")
+
+        # ── Tier 2: Extracted Evidence ────────────────────────────
+        with ui.expansion(
+            t("audit.tier2_title"),
+            icon="analytics",
+        ).classes("w-full q-mt-xs").props("dense"):
+            companies = meta.get("companies", {})
+            if companies:
+                cols = [
+                    {"name": "ticker", "label": "Ticker", "field": "ticker", "align": "left"},
+                    {"name": "capex_bn", "label": "CapEx ($B)", "field": "capex_bn", "align": "right"},
+                    {"name": "qoq", "label": "QoQ %", "field": "qoq", "align": "right"},
+                    {"name": "yoy", "label": "YoY %", "field": "yoy", "align": "right"},
+                    {"name": "cut", "label": "Cut?", "field": "cut", "align": "center"},
+                    {"name": "quote", "label": "Quote", "field": "quote", "align": "left"},
+                ]
+                rows = []
+                for ticker, co in companies.items():
+                    rows.append({
+                        "ticker": ticker,
+                        "capex_bn": f"{co.get('capex_absolute_bn', 0):.2f}" if co.get("capex_absolute_bn") is not None else na,
+                        "qoq": f"{co.get('qoq_growth_pct', 0):.1f}" if co.get("qoq_growth_pct") is not None else na,
+                        "yoy": f"{co.get('yoy_growth_pct', 0):.1f}" if co.get("yoy_growth_pct") is not None else na,
+                        "cut": "YES" if co.get("explicit_guidance_cut_mentioned") else "no",
+                        "quote": smart_truncate(co.get("exact_capex_quote", na), 80),
+                    })
+                ui.table(columns=cols, rows=rows, row_key="ticker").classes("w-full")
+            else:
+                ui.label(na).classes("text-caption text-grey")
+
+            raw_gemini = meta.get("raw_gemini_response", "")
+            if raw_gemini:
+                with ui.expansion(
+                    "Raw Gemini Response",
+                    icon="smart_toy",
+                ).classes("w-full q-mt-xs").props("dense"):
+                    ui.code(
+                        str(raw_gemini)[:6000] if len(str(raw_gemini)) > 6000 else str(raw_gemini),
+                        language="json",
+                    ).classes("w-full")
+
+        # ── Tier 3: Mathematical Verdict ──────────────────────────
+        with ui.expansion(
+            t("audit.tier3_title"),
+            icon="calculate",
+        ).classes("w-full q-mt-xs").props("dense"):
+            trend = meta.get("capex_trend", na)
+            veto = meta.get("veto_triggered", False)
+            key_quote = meta.get("key_management_quote", "")
+            trend_color = {
+                "accelerating": "#22c55e", "stable": "#eab308",
+                "decelerating": "#f97316", "contracting": "#ef4444",
+            }.get(trend, "#888")
+
+            ui.label(f"{t('audit.trend')}: {trend.upper()}").classes(
+                "text-bold"
+            ).style(f"color:{trend_color}")
+            ui.label(f"{t('audit.veto')}: {'YES' if veto else 'no'}").classes("text-caption")
+            if key_quote:
+                ui.label(f"\u201c{key_quote}\u201d").classes("text-caption text-italic q-mt-xs")
+
+
 def signal_drilldown(composite) -> None:
     """Expandable drill-down showing individual readings per signal category."""
     for cat, cat_sig in composite.categories.items():
@@ -557,6 +801,10 @@ def signal_drilldown(composite) -> None:
                             json.dumps(r.metadata, indent=2, default=str),
                             language="json",
                         ).classes("w-full")
+
+            # ── CAPEX Audit Drawer (AI Health only) ───────────────
+            if cat == SignalCategory.AI_HEALTH:
+                _capex_audit_drawer(cat_sig)
 
     # ── Composite Calculation Transparency ────────────────────────
     transparency = getattr(composite, "composite_transparency", {})
@@ -652,23 +900,26 @@ def portfolio_table(portfolio) -> None:
         columns = [
             {"name": "ticker", "label": t("th.ticker"), "field": "ticker", "align": "left", "sortable": True},
             {"name": "shares", "label": t("th.shares"), "field": "shares", "align": "right"},
+            {"name": "price_usd", "label": "Price ($)", "field": "price_usd", "align": "right", "sortable": True},
             {"name": "avg_cost", "label": t("th.avg_cost"), "field": "avg_cost", "align": "right"},
-            {"name": "current", "label": t("th.current"), "field": "current", "align": "right"},
             {"name": "value", "label": t("th.value_eur"), "field": "value", "align": "right", "sortable": True},
             {"name": "pnl", "label": t("th.pnl_eur"), "field": "pnl", "align": "right", "sortable": True},
             {"name": "weight", "label": t("th.weight_pct"), "field": "weight", "align": "right", "sortable": True},
+            {"name": "in_pie", "label": "In Pie", "field": "in_pie", "align": "center"},
         ]
 
         rows = []
         for ticker, pos in sorted(portfolio.positions.items()):
+            pie_pct = (pos.quantity_in_pies / pos.shares * 100) if pos.shares > 0 else 0.0
             rows.append({
                 "ticker": ticker,
                 "shares": f"{pos.shares:.4f}",
-                "avg_cost": f"{pos.avg_cost_eur:.2f}",
-                "current": f"{pos.current_price_eur:.2f}",
-                "value": f"{pos.market_value_eur:.2f}",
+                "price_usd": f"${pos.current_price_usd:,.2f}",
+                "avg_cost": f"\u20ac{pos.avg_cost_eur:.2f}",
+                "value": f"\u20ac{pos.market_value_eur:.2f}",
                 "pnl": f"{pos.unrealized_pnl_eur:+.2f}",
                 "weight": f"{pos.weight_pct:.1f}%",
+                "in_pie": f"{pie_pct:.0f}%" if pie_pct > 0 else "-",
             })
 
         ui.table(columns=columns, rows=rows, row_key="ticker").classes("w-full")
@@ -832,7 +1083,8 @@ def interactive_universe_panel(on_change=None, heatmap_data: dict | None = None)
 
                 for stk in stocks_raw:
                     enr = enr_map.get(stk.ticker, {})
-                    price = enr.get("price_eur", 0.0)
+                    price_usd = enr.get("price_usd", 0.0)
+                    price_eur = enr.get("price_eur", 0.0)
                     change = enr.get("daily_change_pct", 0.0)
                     value = enr.get("portfolio_value_eur", 0.0)
                     weight = enr.get("weight_pct", 0.0)
@@ -855,9 +1107,9 @@ def interactive_universe_panel(on_change=None, heatmap_data: dict | None = None)
                                 "min-width:110px;color:#aaa;font-size:13px"
                             )
 
-                            # Price EUR
-                            if price > 0:
-                                ui.label(f"\u20ac{price:,.2f}").style(
+                            # Price USD (native instrument currency)
+                            if price_usd > 0:
+                                ui.label(f"${price_usd:,.2f}").style(
                                     "min-width:85px;font-weight:600"
                                 )
                             else:
@@ -869,12 +1121,12 @@ def interactive_universe_panel(on_change=None, heatmap_data: dict | None = None)
 
                             # Daily change
                             chg_color = "#22c55e" if change >= 0 else "#ef4444"
-                            chg_str = f"{change:+.2f}%" if price > 0 else "-"
+                            chg_str = f"{change:+.2f}%" if price_usd > 0 else "-"
                             ui.label(chg_str).style(
                                 f"min-width:60px;color:{chg_color};font-weight:600"
                             )
 
-                            # Portfolio value + weight vs max
+                            # Portfolio value (EUR) + weight vs max
                             if value > 0:
                                 ui.label(
                                     f"\u20ac{value:,.0f} ({weight:.1f}% / {max_w:.0f}% max)"
@@ -916,12 +1168,16 @@ def interactive_universe_panel(on_change=None, heatmap_data: dict | None = None)
                             )
 
                             async def _remove(stock=stk):
-                                from rewired.portfolio.manager import load_portfolio
-                                pf = await _run_in_thread(load_portfolio)
-                                if pf and stock.ticker in pf.positions:
-                                    feedback.set_text(t("unimgmt.held_warning", ticker=stock.ticker))
-                                    feedback.style("color:#ef4444")
-                                    return
+                                try:
+                                    from rewired.data.broker import get_portfolio, is_configured
+                                    if is_configured():
+                                        pf = await _run_in_thread(get_portfolio)
+                                        if pf and stock.ticker in pf.positions:
+                                            feedback.set_text(t("unimgmt.held_warning", ticker=stock.ticker))
+                                            feedback.style("color:#ef4444")
+                                            return
+                                except Exception:
+                                    pass  # Allow removal if broker unavailable
                                 ok = await _confirm_dialog(
                                     t("unimgmt.btn_remove"),
                                     t("unimgmt.confirm_remove", ticker=stock.ticker),
@@ -1218,7 +1474,7 @@ def ai_copilot_panel() -> None:
                                     ).classes("w-full")
 
                         # Sentiment data
-                        ui.label("SENTIMENT (VIX / yfinance)").classes("text-bold text-h6 q-mt-md")
+                        ui.label("SENTIMENT (VIX structure + VXN tech stress)").classes("text-bold text-h6 q-mt-md")
                         for r in sent_readings:
                             color_val = r.color.value.upper()
                             hex_c = _color_hex(r.color.value)
@@ -1375,299 +1631,6 @@ def ticker_input_for_trade(
         sel.on("update:model-value", lambda e: on_select(e.args if hasattr(e, "args") else sel.value))
 
     return sel
-
-
-# ── Tab 3: Portfolio – Trade Recording ────────────────────────────────────────
-
-
-def trade_recording_form(on_trade_recorded) -> None:
-    """Render a form to record BUY/SELL transactions with full validation.
-
-    Non-universe tickers show extra fields (layer, tier, name) to add
-    the stock to the universe automatically on first BUY.
-    """
-    _TICKER_RE = re.compile(r"^[A-Z0-9.]{1,10}$")
-
-    with ui.card().classes("w-full"):
-        ui.label(t("trade.title")).classes("text-h5 q-mb-md")
-        ui.markdown(t("trade.intro"))
-
-        ticker_input = ticker_input_for_trade(
-            label=t("trade.ticker_label"),
-            placeholder=t("trade.ticker_placeholder"),
-        )
-        action_select = ui.toggle(["BUY", "SELL"], value="BUY").classes("q-mt-sm")
-        with ui.row().classes("items-end gap-4"):
-            shares_input = ui.number(
-                t("trade.shares_label"), value=1.0, min=0.0001, step=0.1, format="%.4f",
-            )
-            price_input = ui.number(
-                t("trade.price_label"), value=0.0, min=0.0, step=0.01, format="%.2f",
-            )
-        notes_input = ui.input(
-            t("trade.notes_label"), placeholder=t("trade.notes_placeholder"),
-        ).classes("w-full")
-
-        # ── New-ticker conditional fields (hidden by default) ────────
-        new_ticker_container = ui.column().classes("w-full gap-2")
-        new_ticker_container.set_visibility(False)
-        with new_ticker_container:
-            ui.label(t("trade.new_ticker_note")).classes("text-caption text-warning")
-            with ui.row().classes("items-end gap-4"):
-                stock_name_input = ui.input(
-                    t("trade.stock_name_label"),
-                    placeholder=t("trade.stock_name_placeholder"),
-                ).classes("w-64")
-                from rewired.models.universe import Layer, Tier
-                layer_select = ui.select(
-                    {lyr.value: f"L{lyr.value} {layer_name(lyr.value)}" for lyr in Layer},
-                    value=Layer.L3.value,
-                    label=t("th.layer"),
-                )
-                tier_select = ui.select(
-                    {tr.value: tier_name(tr.value) for tr in Tier},
-                    value=Tier.T3.value,
-                    label=t("th.tier"),
-                )
-                max_weight_input = ui.number(
-                    t("trade.max_weight_label"), value=5.0, min=1.0, max=15.0,
-                    step=0.5, format="%.1f",
-                )
-
-        # Show/hide new-ticker fields based on ticker content
-        def _on_ticker_change(_):
-            """Check universe membership when ticker is selected.
-
-            For unknown tickers, trigger FMP + Gemini auto-classification to
-            pre-populate the Layer/Tier fields.
-            """
-            val = _extract_ticker(ticker_input.value)
-            if not val:
-                new_ticker_container.set_visibility(False)
-                return
-            from rewired.models.universe import load_universe
-            try:
-                uni = load_universe()
-                is_known = uni.get_stock(val) is not None
-            except Exception:
-                is_known = False
-            new_ticker_container.set_visibility(not is_known)
-
-            # Auto-classify unknown tickers via FMP + Gemini
-            if not is_known:
-                async def _auto_classify():
-                    try:
-                        def _classify():
-                            from rewired.data.fmp import get_profile
-                            profile = get_profile(val)
-                            if not profile:
-                                return None
-                            name = profile.get("companyName", val)
-                            return {"name": name, "layer": 4, "tier": 3, "max_weight": 5.0}
-                        info = await _run_in_thread(_classify)
-                        if info:
-                            stock_name_input.set_value(info["name"])
-                            layer_select.set_value(info["layer"])
-                            tier_select.set_value(info["tier"])
-                            max_weight_input.set_value(info["max_weight"])
-                    except Exception:
-                        pass
-                import asyncio
-                asyncio.ensure_future(_auto_classify())
-
-        ticker_input.on("update:model-value", _on_ticker_change)
-
-        feedback = ui.label("").classes("text-caption")
-
-        async def submit_trade():
-            # ── Validate inputs ──────────────────────────────────
-            ticker_val = _extract_ticker(ticker_input.value)
-            if not ticker_val:
-                feedback.set_text(t("trade.err_ticker_required"))
-                feedback.style("color:#ef4444")
-                return
-            if not _TICKER_RE.match(ticker_val):
-                feedback.set_text(t("trade.err_ticker_format"))
-                feedback.style("color:#ef4444")
-                return
-
-            shares_val = shares_input.value or 0
-            price_val = price_input.value or 0
-            if shares_val <= 0 or price_val <= 0:
-                feedback.set_text(t("trade.err_positive"))
-                feedback.style("color:#ef4444")
-                return
-            if price_val > 100_000:
-                feedback.set_text(t("trade.err_price_limit"))
-                feedback.style("color:#ef4444")
-                return
-
-            action_val = action_select.value or "BUY"
-            notes_val = (notes_input.value or "").strip()
-            if len(notes_val) > 200:
-                feedback.set_text(t("trade.err_notes_long"))
-                feedback.style("color:#ef4444")
-                return
-
-            # SELL validations
-            if action_val == "SELL":
-                from rewired.portfolio.manager import load_portfolio
-                pf_check = await _run_in_thread(load_portfolio)
-                pos = pf_check.positions.get(ticker_val) if pf_check else None
-                if not pos:
-                    feedback.set_text(t("trade.err_sell_no_position", ticker=ticker_val))
-                    feedback.style("color:#ef4444")
-                    return
-                if shares_val > pos.shares + 0.0001:
-                    feedback.set_text(t(
-                        "trade.err_sell_too_many",
-                        shares=f"{shares_val:.4f}",
-                        ticker=ticker_val,
-                        held=f"{pos.shares:.4f}",
-                    ))
-                    feedback.style("color:#ef4444")
-                    return
-
-            # New-ticker validations
-            is_new_ticker = new_ticker_container.visible
-            stock_name_val = ""
-            layer_val = None
-            tier_val = None
-            max_weight_val = 5.0
-            if is_new_ticker and action_val == "BUY":
-                stock_name_val = (stock_name_input.value or "").strip()
-                if not stock_name_val:
-                    feedback.set_text(t("trade.err_name_required"))
-                    feedback.style("color:#ef4444")
-                    return
-                layer_val = layer_select.value
-                tier_val = tier_select.value
-                max_weight_val = max_weight_input.value or 5.0
-
-            # ── Confirmation dialog ──────────────────────────────
-            total_eur = shares_val * price_val
-            confirmed = await _confirm_dialog(
-                t("trade.confirm_title"),
-                t(
-                    "trade.confirm_body",
-                    action=action_val,
-                    shares=f"{shares_val:.4f}",
-                    ticker=ticker_val,
-                    price=f"{price_val:.2f}",
-                    total=f"{total_eur:.2f}",
-                ),
-            )
-            if not confirmed:
-                return
-
-            # ── Execute ──────────────────────────────────────────
-            feedback.set_text(t("trade.recording"))
-            feedback.style("color:#eab308")
-
-            try:
-                def _do_record():
-                    from rewired.portfolio.manager import load_portfolio, record_transaction, save_portfolio
-                    # Add new ticker to universe if needed
-                    if is_new_ticker and action_val == "BUY" and stock_name_val:
-                        from rewired.models.universe import Stock, load_universe, save_universe, Layer as Lyr, Tier as Tr
-                        uni = load_universe()
-                        if uni.get_stock(ticker_val) is None:
-                            uni.stocks.append(Stock(
-                                ticker=ticker_val,
-                                name=stock_name_val,
-                                layer=Lyr(layer_val),
-                                tier=Tr(tier_val),
-                                max_weight_pct=max_weight_val,
-                            ))
-                            save_universe(uni)
-
-                    pf = load_portfolio()
-                    record_transaction(
-                        pf,
-                        ticker=ticker_val,
-                        action=action_val,
-                        shares=shares_val,
-                        price_eur=price_val,
-                        notes=notes_val,
-                    )
-                    save_portfolio(pf)
-
-                await _run_in_thread(_do_record)
-
-                msg = t(
-                    "trade.recorded",
-                    action=action_val,
-                    shares=f"{shares_val:.4f}",
-                    ticker=ticker_val,
-                    price=f"{price_val:.2f}",
-                )
-                if is_new_ticker and action_val == "BUY" and stock_name_val:
-                    msg += " " + t(
-                        "trade.added_to_universe",
-                        ticker=ticker_val,
-                        layer=layer_val,
-                        tier=tier_val,
-                    )
-                feedback.set_text(msg)
-                feedback.style("color:#22c55e")
-                # Reset fields
-                ticker_input.set_value("")
-                shares_input.set_value(1.0)
-                price_input.set_value(0.0)
-                notes_input.set_value("")
-                new_ticker_container.set_visibility(False)
-                # Trigger dashboard refresh
-                if on_trade_recorded:
-                    await on_trade_recorded()
-            except Exception as e:
-                feedback.set_text(t("trade.error", err=str(e)))
-                feedback.style("color:#ef4444")
-
-        ui.button(t("trade.submit"), on_click=submit_trade, icon="add_circle").props(
-            "color=primary"
-        ).classes("q-mt-md")
-
-
-def transaction_history_table(portfolio) -> None:
-    """Render the full transaction log."""
-    with ui.card().classes("w-full"):
-        ui.label(t("txn.title")).classes("text-h5 q-mb-md")
-
-        if not portfolio or not portfolio.transactions:
-            ui.label(t("txn.empty")).classes("text-grey")
-            return
-
-        columns = [
-            {"name": "date", "label": t("th.date"), "field": "date", "align": "left", "sortable": True},
-            {"name": "ticker", "label": t("th.ticker"), "field": "ticker", "align": "left"},
-            {"name": "action", "label": t("th.action"), "field": "action", "align": "center"},
-            {"name": "shares", "label": t("th.shares"), "field": "shares", "align": "right"},
-            {"name": "price", "label": t("th.price_eur"), "field": "price", "align": "right"},
-            {"name": "total", "label": t("th.total_eur"), "field": "total", "align": "right"},
-            {"name": "signal", "label": t("th.signal"), "field": "signal", "align": "center"},
-            {"name": "notes", "label": t("th.notes"), "field": "notes", "align": "left"},
-        ]
-
-        rows = []
-        for i, tx in enumerate(reversed(portfolio.transactions)):
-            sig_val = tx.signal_color_at_time.value if tx.signal_color_at_time else "-"
-            rows.append({
-                "id": i,
-                "date": str(tx.date),
-                "ticker": tx.ticker,
-                "action": tx.action,
-                "shares": f"{tx.shares:.4f}",
-                "price": f"{tx.price_eur:.2f}",
-                "total": f"{tx.shares * tx.price_eur:.2f}",
-                "signal": sig_val.upper() if sig_val != "-" else "-",
-                "signal_hex": _color_hex(sig_val) if sig_val != "-" else "#888",
-                "notes": tx.notes or "-",
-            })
-
-        tbl = ui.table(
-            columns=columns, rows=rows, row_key="id", pagination={"rowsPerPage": 15}
-        ).classes("w-full")
-        _add_color_cell_slot(tbl, 'signal')
 
 
 # ── Monitor Control Panel ────────────────────────────────────────────────────
@@ -1893,12 +1856,16 @@ def universe_management_card(on_change=None) -> None:
 
                 # ── Remove flow ──────────────────────────────────
                 async def _remove(stk=stock):
-                    from rewired.portfolio.manager import load_portfolio
-                    pf = await _run_in_thread(load_portfolio)
-                    if pf and stk.ticker in pf.positions:
-                        feedback.set_text(t("unimgmt.held_warning", ticker=stk.ticker))
-                        feedback.style("color:#ef4444")
-                        return
+                    try:
+                        from rewired.data.broker import get_portfolio, is_configured
+                        if is_configured():
+                            pf = await _run_in_thread(get_portfolio)
+                            if pf and stk.ticker in pf.positions:
+                                feedback.set_text(t("unimgmt.held_warning", ticker=stk.ticker))
+                                feedback.style("color:#ef4444")
+                                return
+                    except Exception:
+                        pass  # Allow removal if broker unavailable
                     ok = await _confirm_dialog(
                         t("unimgmt.btn_remove"),
                         t("unimgmt.confirm_remove", ticker=stk.ticker),

@@ -69,34 +69,41 @@ macro:
 
 # ── Sentiment Rules (Dimension 2: The Contrarian Indicator) ──────────────
 sentiment:
+  # Dual Radar: Radar A (macro liquidity) + Radar B (tech stress)
   data_sources:
-    vix:
+    # Radar B — Tech Sector Velocity & Level (NASDAQ-100)
+    vxn_level:
       source: yfinance
-      ticker: "^VIX"
+      ticker: "^VXN"            # NASDAQ-100 implied volatility
+    # Radar A — Macro Term Structure (S&P 500)
     vix_term_structure:
       source: yfinance
       tickers:
-        - "^VIX"              # Spot VIX (30-day implied vol)
-        - "^VIX3M"            # 3-month VIX (longer-dated)
+        - "^VIX"               # Spot VIX (S&P 500 30-day implied vol)
+        - "^VIX3M"             # 3-month VIX (longer-dated)
       # Contango: VIX3M > VIX = normal/calm
       # Backwardation: VIX > VIX3M = panic/hedging
+    velocity:
+      window_days: 3              # 3 trading days (index-based, avoids weekends)
+      spike_threshold_pct: 20.0   # 20% rise in 3 trading days
+      min_absolute: 18            # only trigger if VXN > 18
 
   rules:
     red:
-      # Liquidity Crisis: VIX > 35 AND severe backwardation
-      vix_above: 35
+      # Liquidity Crisis: VXN > 35 AND severe backwardation
+      vxn_above: 35
       term_structure_backwardation: true
     orange:
-      # Deteriorating: VIX > 25 AND 5MA > 20MA (expanding volatility)
-      vix_above: 25
-      vix_trend_upward: true   # 5-day MA > 20-day MA
+      # Deteriorating: VXN > 25 AND 5MA > 20MA (expanding volatility)
+      vxn_above: 25
+      vxn_trend_upward: true   # 5-day MA > 20-day MA
     yellow:
-      # Divergence: VIX between 18-25
-      vix_low: 18
-      vix_high: 25
+      # Divergence: VXN between 18-25
+      vxn_low: 18
+      vxn_high: 25
     green:
-      # Stable/Complacent: VIX < 18 AND normal contango
-      vix_below: 18
+      # Stable/Complacent: VXN < 18 AND normal contango
+      vxn_below: 18
       term_structure_contango: true
 
 # ── AI Health Rules (Dimension 3: The Moat - Absolute Veto Power) ────────
@@ -120,12 +127,19 @@ ai_health:
 
   rules:
     red:
-      # VETO: ANY Big 4 CapEx CUT announced
+      # VETO: Significant YoY contraction AND fatal management phrasing
       capex_trend: contracting
       veto_power: true
+      yoy_contraction_threshold: -5.0
+      fatal_phrases:
+        - "weakening demand"
+        - "ROI pressure"
+        - "cutting infrastructure spend"
     orange:
-      # ROI Anxiety: CapEx growing but YoY growth halved for 2 consecutive quarters
+      # ROI Anxiety / Efficiency Phase: mild dip or deceleration
       capex_trend: decelerating
+      yoy_mild_dip_min: -5.0
+      yoy_mild_dip_max: 0.0
       management_keywords:
         - "ROI pressure"
         - "efficiency"

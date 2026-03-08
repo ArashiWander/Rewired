@@ -189,11 +189,12 @@ def ask_followup(question: str, history: list[dict[str, str]] | None = None) -> 
     except Exception:
         pass
     try:
-        from rewired.portfolio.manager import load_portfolio
-        pf = load_portfolio()
-        portfolio_value = f"{pf.total_value_eur:.0f}"
-        if pf.total_value_eur > 0:
-            cash_pct = f"{pf.cash_eur / pf.total_value_eur * 100:.1f}"
+        from rewired.data.broker import get_portfolio, is_configured
+        if is_configured():
+            pf = get_portfolio()
+            portfolio_value = f"{pf.total_value_eur:.0f}"
+            if pf.total_value_eur > 0:
+                cash_pct = f"{pf.cash_eur / pf.total_value_eur * 100:.1f}"
     except Exception:
         pass
 
@@ -231,11 +232,12 @@ def _get_signal_summary() -> str:
 def _get_portfolio_summary() -> str:
     """Get current portfolio state as text for the prompt."""
     try:
-        from rewired.portfolio.manager import load_portfolio, refresh_prices
+        from rewired.data.broker import get_portfolio, is_configured
 
-        pf = load_portfolio()
-        if pf.positions:
-            refresh_prices(pf)
+        if not is_configured():
+            return "[T212 broker not configured]"
+
+        pf = get_portfolio()
 
         lines = [
             f"Total value: {pf.total_value_eur:.2f} EUR",
@@ -253,20 +255,21 @@ def _get_portfolio_summary() -> str:
 
         return "\n".join(lines)
     except Exception as e:
-        return f"[Error fetching portfolio: {e}]"
+        return f"[Broker unavailable: {e}]"
 
 
 def _get_pies_summary() -> str:
     """Get current Pies allocation as text for the prompt."""
     try:
+        from rewired.data.broker import get_portfolio, is_configured
         from rewired.models.universe import load_universe
-        from rewired.portfolio.manager import load_portfolio, refresh_prices
         from rewired.portfolio.sizing import calculate_pies_allocation
 
+        if not is_configured():
+            return "[T212 broker not configured]"
+
         uni = load_universe()
-        pf = load_portfolio()
-        if pf.positions:
-            refresh_prices(pf)
+        pf = get_portfolio()
         sig = _cached_signals()
         allocs = calculate_pies_allocation(pf, uni, sig)
 

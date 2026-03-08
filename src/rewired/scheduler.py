@@ -50,13 +50,9 @@ def check_signals() -> None:
 
 def daily_portfolio_summary() -> None:
     """Generate and send daily portfolio summary."""
-    from rewired.portfolio.manager import load_portfolio, refresh_prices
-    from rewired.portfolio.tracker import snapshot_portfolio
+    from rewired.data.broker import get_portfolio
 
-    pf = load_portfolio()
-    if pf.positions:
-        refresh_prices(pf)
-        snapshot_portfolio(pf)
+    pf = get_portfolio()
 
     total = pf.total_value_eur
     cash = pf.cash_eur

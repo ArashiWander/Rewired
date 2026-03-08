@@ -50,6 +50,14 @@ class CircuitBreakerError(Exception):
         super().__init__(message or f"Circuit breaker: {category} missing {missing_metrics}")
 
 
+class BrokerUnavailableError(Exception):
+    """Raised when the Trading 212 broker API is unreachable or returns an auth error.
+
+    This is a HARD HALT — no fallback, no stale data, no offline mode.
+    Every caller must let this propagate unswallowed.
+    """
+
+
 class DataQuality(BaseModel):
     """Tracks data freshness and availability for a single metric."""
     metric_name: str

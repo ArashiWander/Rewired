@@ -10,6 +10,9 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+import yaml
+
+from rewired import get_config_dir
 from rewired.data.ai_health import get_ai_health_readings
 from rewired.models.signals import (
     CategorySignal,
@@ -21,6 +24,14 @@ from rewired.signals.rules import evaluate_ai_health_rules
 logger = logging.getLogger(__name__)
 
 _BIG4 = ("MSFT", "GOOGL", "AMZN", "META")
+
+
+def _load_ai_health_config() -> dict:
+    """Load ai_health rules config (fresh each call, per convention)."""
+    config_path = get_config_dir() / "signals.yaml"
+    with open(config_path, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    return cfg.get("ai_health", {}).get("rules", {})
 
 
 def calculate_ai_health_signal() -> CategorySignal:
@@ -76,36 +87,66 @@ def _compute_capex_trend(metadata: dict) -> str:
 
     Decision tree (evaluated in order, first match wins):
 
-    1. VETO (CONTRACTING): If ANY Big 4 has explicit_guidance_cut_mentioned
+    1. VETO (CONTRACTING): If ANY Big 4 has significant YoY contraction
+       (< -5%) AND management quote contains fatal phrasing
        → "contracting" (RED)
 
-    2. DECELERATING: Compute acceleration = current_qoq - previous_qoq.
+    2. MILD-DIP ORANGE: If ANY Big 4 has a mild YoY dip (−5% to 0%) AND
+       ≥ N/2 companies are dipping → "decelerating" (ORANGE)
+
+    3. DECELERATING: Compute acceleration = current_qoq - previous_qoq.
        If acceleration ≤ 0 for 2 consecutive quarters for ≥ N/2 companies
        → "decelerating" (ORANGE)
 
-    3. ACCELERATING: If acceleration > 0 for ≥ N/2 companies
+    4. ACCELERATING: If acceleration > 0 for ≥ N/2 companies
        → "accelerating" (GREEN)
 
-    4. Otherwise → "stable" (YELLOW)
+    5. Otherwise → "stable" (YELLOW)
     """
     companies = metadata.get("companies", {})
     if not companies:
         return "unknown"
 
-    # ── VETO check: any Big 4 cutting CAPEX ───────────────────────────
+    # Load configurable thresholds
+    cfg = _load_ai_health_config()
+    red_cfg = cfg.get("red", {})
+    yoy_threshold = red_cfg.get("yoy_contraction_threshold", -5.0)
+    fatal_phrases = [p.lower() for p in red_cfg.get("fatal_phrases", [
+        "weakening demand", "ROI pressure", "cutting infrastructure spend",
+    ])]
+
+    # ── VETO check: significant contraction AND fatal phrasing ────────
+    valid_companies = [t for t in _BIG4 if t in companies]
+    mild_dip_count = 0
+
     for ticker in _BIG4:
         co = companies.get(ticker, {})
-        if co.get("explicit_guidance_cut_mentioned", False):
-            logger.warning("CAPEX VETO: %s has explicit guidance cut", ticker)
+        yoy = co.get("yoy_growth_pct", 0.0)
+        quote = co.get("exact_capex_quote", "").lower()
+
+        # RED: significant contraction AND fatal management language
+        if yoy < yoy_threshold and any(phrase in quote for phrase in fatal_phrases):
+            logger.warning(
+                "CAPEX VETO: %s YoY %.1f%% < %.1f%% with fatal phrasing",
+                ticker, yoy, yoy_threshold,
+            )
             return "contracting"
+
+        # Track mild dips (efficiency phase → ORANGE route)
+        if yoy_threshold <= yoy < 0.0:
+            mild_dip_count += 1
+
+    n = len(valid_companies)
+    if n == 0:
+        return "unknown"
+
+    # ── Mild-dip ORANGE: ≥ N/2 companies with minor YoY contraction ──
+    if mild_dip_count >= (n / 2):
+        logger.info("CAPEX mild dip: %d/%d companies in efficiency phase", mild_dip_count, n)
+        return "decelerating"
 
     # ── Velocity & Acceleration check ─────────────────────────────────
     history = metadata.get("quarterly_history", [])
-    valid_companies = [t for t in _BIG4 if t in companies]
-    n = len(valid_companies)
-
-    if n == 0:
-        return "unknown"
 
     # If we have at least 2 quarters of history, compute acceleration
     if len(history) >= 2:
