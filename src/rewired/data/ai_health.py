@@ -161,12 +161,13 @@ def _load_capex_cache() -> dict | None:
 
 
 def _save_capex_cache(data: dict) -> None:
-    """Save CAPEX analysis result to cache."""
+    """Save CAPEX analysis result to cache (atomic write)."""
     data["timestamp"] = datetime.now().isoformat()
     data["schema_version"] = _CAPEX_CACHE_VERSION
     cache_path = get_data_dir() / "capex_cache.json"
-    with open(cache_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    from rewired.io import atomic_write
+
+    atomic_write(cache_path, json.dumps(data, indent=2))
 
 
 def _format_quarter_label(date_text: str, period: str = "") -> str:
@@ -503,8 +504,9 @@ def _append_quarterly_snapshot(result: dict) -> None:
     # Keep max 8 quarters (2 years)
     history = history[-8:]
 
-    with open(history_path, "w", encoding="utf-8") as f:
-        json.dump(history, f, indent=2)
+    from rewired.io import atomic_write
+
+    atomic_write(history_path, json.dumps(history, indent=2))
 
 
 def _snapshot_entry(result: dict, quarter: str) -> dict:

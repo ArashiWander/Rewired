@@ -437,8 +437,8 @@ def actions_playbook(composite, suggestions: list[dict]) -> None:
             ui.label(t("actions.no_actions")).classes("text-grey")
             return
 
-        sell_count = sum(1 for s in suggestions if s.get("action") == "SELL")
-        buy_count = sum(1 for s in suggestions if s.get("action") == "BUY")
+        sell_count = sum(1 for s in suggestions if (s.action if hasattr(s, "action") else s.get("action")) == "SELL")
+        buy_count = sum(1 for s in suggestions if (s.action if hasattr(s, "action") else s.get("action")) == "BUY")
         ui.label(
             t("actions.queue", total=len(suggestions), sell=sell_count, buy=buy_count)
         ).classes("text-bold")
@@ -470,12 +470,13 @@ def suggestions_panel(suggestions: list[dict], composite) -> None:
 
         rows = []
         for s in suggestions:
+            sd = s.model_dump() if hasattr(s, "model_dump") else s
             rows.append({
-                "ticker": s["ticker"],
-                "action": s["action"],
-                "amount": f"{s['amount_eur']:.2f}",
-                "phase": phase_labels.get(s.get("priority", 0), "?"),
-                "reason": s["reason"],
+                "ticker": sd["ticker"],
+                "action": sd["action"],
+                "amount": f"{sd['amount_eur']:.2f}",
+                "phase": phase_labels.get(sd.get("priority", 0), "?"),
+                "reason": sd["reason"],
             })
 
         ui.table(columns=columns, rows=rows, row_key="ticker").classes("w-full")
@@ -493,12 +494,13 @@ def _execute_trades_button(suggestions: list[dict], composite) -> None:
 
         orders = []
         for s in suggestions:
+            sd = s.model_dump() if hasattr(s, "model_dump") else s
             orders.append(OrderRequest(
-                ticker=s["ticker"],
-                side=OrderSide.BUY if s["action"] == "BUY" else OrderSide.SELL,
-                amount_eur=s["amount_eur"],
-                reason=s.get("reason", ""),
-                priority=s.get("priority", 0),
+                ticker=sd["ticker"],
+                side=OrderSide.BUY if sd["action"] == "BUY" else OrderSide.SELL,
+                amount_eur=sd["amount_eur"],
+                reason=sd.get("reason", ""),
+                priority=sd.get("priority", 0),
             ))
 
         with ui.dialog() as dialog, ui.card().classes("min-w-[600px]"):

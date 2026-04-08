@@ -275,9 +275,9 @@ class TestHedgeProtocol:
         sig = make_composite(overall=SignalColor.GREEN)
         suggestions = calculate_suggestions(pf, small_universe, sig)
 
-        hedge_sells = [s for s in suggestions if s["ticker"] == _HEDGE_TICKER and s["action"] == "SELL"]
+        hedge_sells = [s for s in suggestions if s.ticker == _HEDGE_TICKER and s.action == "SELL"]
         assert len(hedge_sells) == 1
-        assert hedge_sells[0]["amount_eur"] > 0
+        assert hedge_sells[0].amount_eur > 0
 
 
 # ═════════════════════════════════════════════════════════════════════════
@@ -294,7 +294,7 @@ class TestSuggestions:
         sig = make_composite(overall=SignalColor.GREEN)
         suggestions = calculate_suggestions(pf, small_universe, sig)
 
-        buys = [s for s in suggestions if s["action"] == "BUY"]
+        buys = [s for s in suggestions if s.action == "BUY"]
         assert len(buys) > 0
 
     def test_red_no_new_t4_buys(self, mock_portfolio_config, small_universe):
@@ -303,7 +303,7 @@ class TestSuggestions:
         sig = make_composite(overall=SignalColor.RED)
         suggestions = calculate_suggestions(pf, small_universe, sig)
 
-        t4_buys = [s for s in suggestions if s["ticker"] == "IONQ" and s["action"] == "BUY"]
+        t4_buys = [s for s in suggestions if s.ticker == "IONQ" and s.action == "BUY"]
         assert len(t4_buys) == 0
 
     def test_red_freezes_t3_t4(self, mock_portfolio_config, invested_portfolio, small_universe):
@@ -311,8 +311,8 @@ class TestSuggestions:
         sig = make_composite(overall=SignalColor.RED)
         suggestions = calculate_suggestions(invested_portfolio, small_universe, sig)
 
-        ionq_sells = [s for s in suggestions if s["ticker"] == "IONQ" and s["action"] == "SELL"]
-        pltr_sells = [s for s in suggestions if s["ticker"] == "PLTR" and s["action"] == "SELL"]
+        ionq_sells = [s for s in suggestions if s.ticker == "IONQ" and s.action == "SELL"]
+        pltr_sells = [s for s in suggestions if s.ticker == "PLTR" and s.action == "SELL"]
         assert len(ionq_sells) == 0, "T4 frozen — should not generate SELL"
         assert len(pltr_sells) == 0, "T3 frozen — should not generate SELL"
 
@@ -321,7 +321,7 @@ class TestSuggestions:
         sig = make_composite(overall=SignalColor.RED)
         suggestions = calculate_suggestions(invested_portfolio, small_universe, sig)
 
-        priorities = [s.get("priority", 99) for s in suggestions]
+        priorities = [s.priority for s in suggestions]
         assert priorities == sorted(priorities)
 
 
@@ -334,9 +334,9 @@ class TestPiesAllocation:
         sig = make_composite(overall=SignalColor.GREEN)
         allocs = calculate_pies_allocation(pf, small_universe, sig)
 
-        xeon = [a for a in allocs if a["ticker"] == _CASH_TICKER]
+        xeon = [a for a in allocs if a.ticker == _CASH_TICKER]
         assert len(xeon) == 1
-        assert xeon[0]["target_pct"] > 0  # 5% cash floor at GREEN
+        assert xeon[0].target_pct > 0  # 5% cash floor at GREEN
 
     def test_red_exits_have_zero_pct(self, mock_portfolio_config, small_universe):
         """RED signal → T4 stocks get 0% target."""
@@ -344,8 +344,8 @@ class TestPiesAllocation:
         sig = make_composite(overall=SignalColor.RED)
         allocs = calculate_pies_allocation(pf, small_universe, sig)
 
-        ionq_alloc = [a for a in allocs if a["ticker"] == "IONQ"]
-        assert ionq_alloc[0]["target_pct"] == 0.0
+        ionq_alloc = [a for a in allocs if a.ticker == "IONQ"]
+        assert ionq_alloc[0].target_pct == 0.0
 
     def test_green_invests_more_than_red(self, mock_portfolio_config, small_universe):
         """GREEN → more equity allocation than RED."""
@@ -354,10 +354,10 @@ class TestPiesAllocation:
         green_sig = make_composite(overall=SignalColor.GREEN)
         green_allocs = calculate_pies_allocation(pf, small_universe, green_sig)
         _instruments = {"CASH", _HEDGE_TICKER, _CASH_TICKER}
-        green_invested = sum(a["target_pct"] for a in green_allocs if a["ticker"] not in _instruments)
+        green_invested = sum(a.target_pct for a in green_allocs if a.ticker not in _instruments)
 
         red_sig = make_composite(overall=SignalColor.RED)
         red_allocs = calculate_pies_allocation(pf, small_universe, red_sig)
-        red_invested = sum(a["target_pct"] for a in red_allocs if a["ticker"] not in _instruments)
+        red_invested = sum(a.target_pct for a in red_allocs if a.ticker not in _instruments)
 
         assert green_invested > red_invested

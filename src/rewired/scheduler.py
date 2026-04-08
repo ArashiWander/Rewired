@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import logging
+import signal
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +17,10 @@ from rewired import get_data_dir
 from rewired.notifications.dispatcher import dispatch_signal_change, dispatch_portfolio_summary
 
 console = Console()
+logger = logging.getLogger(__name__)
+
+# Shutdown event for graceful termination
+_shutdown = threading.Event()
 
 
 def _get_last_signal_color() -> str | None:
@@ -91,7 +98,19 @@ def reeval_universe() -> None:
 
 
 def start_monitor() -> None:
-    """Start the scheduled monitoring loop."""
+    """Start the scheduled monitoring loop with graceful shutdown."""
+    _shutdown.clear()
+
+    # Register signal handlers for clean termination
+    def _handle_shutdown(signum, frame):
+        sig_name = signal.Signals(signum).name
+        logger.info("Received %s — shutting down gracefully", sig_name)
+        console.print(f"\n[yellow]Received {sig_name} — finishing current task...[/yellow]")
+        _shutdown.set()
+
+    signal.signal(signal.SIGINT, _handle_shutdown)
+    signal.signal(signal.SIGTERM, _handle_shutdown)
+
     # Signal check every 4 hours during market hours
     schedule.every(4).hours.do(check_signals)
 
@@ -114,12 +133,13 @@ def start_monitor() -> None:
     console.print("  - Universe rebalance: Sunday at 20:00")
     console.print("[dim]Press Ctrl+C to stop[/dim]\n")
 
-    try:
-        while True:
-            schedule.run_pending()
-            time.sleep(60)
-    except KeyboardInterrupt:
-        console.print("\n[bold]Monitor stopped.[/bold]")
+    while not _shutdown.is_set():
+        schedule.run_pending()
+        # Sleep in small increments so shutdown is responsive
+        _shutdown.wait(timeout=10)
+
+    schedule.clear()
+    console.print("\n[bold]Monitor stopped.[/bold]")
 
 
 # ── Live price feed ──────────────────────────────────────────────────────
@@ -226,9 +246,9 @@ def start_price_feed(tickers: list[str], use_ibkr: bool = False) -> None:
 
     # yfinance polling fallback
     def _poll_loop():
-        while True:
+        while not _shutdown.is_set():
             poll_prices_yfinance(tickers)
-            time.sleep(_PRICE_POLL_INTERVAL)
+            _shutdown.wait(timeout=_PRICE_POLL_INTERVAL)
 
     thread = threading.Thread(target=_poll_loop, daemon=True, name="price-feed")
     thread.start()

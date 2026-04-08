@@ -14,7 +14,9 @@ triggers the circuit breaker (defaults to ORANGE).
 
 from __future__ import annotations
 
+import logging
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any
@@ -22,6 +24,7 @@ from typing import Any
 from rich.console import Console
 
 console = Console(force_terminal=True)
+logger = logging.getLogger(__name__)
 
 
 # ── Stage result ─────────────────────────────────────────────────────────
@@ -54,7 +57,7 @@ def _stage(
             "status": "error",
             "duration": time.time() - t0,
             "result": None,
-            "detail": str(e)[:120],
+            "detail": str(e),
             "critical": critical,
         }
 
@@ -62,10 +65,14 @@ def _stage(
 # ── Parallel helper ──────────────────────────────────────────────────────
 
 
-def _parallel_stages(stages: list[tuple[str, Any, bool]]) -> list[dict]:
-    """Run stages in parallel threads.
+def _parallel_stages(
+    stages: list[tuple[str, Any, bool]],
+    timeout: float = 60.0,
+) -> list[dict]:
+    """Run stages in parallel threads with per-stage timeout.
 
     *stages* is a list of ``(name, callable, critical)`` tuples.
+    *timeout* is the max seconds each stage may run before being marked as error.
     Returns list of stage result dicts.
     """
     results: list[dict] = []
@@ -73,10 +80,30 @@ def _parallel_stages(stages: list[tuple[str, Any, bool]]) -> list[dict]:
         futures = {}
         for name, fn, critical in stages:
             fut = pool.submit(_stage, name, fn, critical=critical)
-            futures[fut] = name
+            futures[fut] = (name, critical)
 
-        for fut in as_completed(futures):
-            results.append(fut.result())
+        for fut in as_completed(futures, timeout=timeout + 5):
+            name, critical = futures[fut]
+            try:
+                results.append(fut.result(timeout=timeout))
+            except TimeoutError:
+                results.append({
+                    "name": name,
+                    "status": "error",
+                    "duration": timeout,
+                    "result": None,
+                    "detail": f"Timed out after {timeout:.0f}s",
+                    "critical": critical,
+                })
+            except Exception as e:
+                results.append({
+                    "name": name,
+                    "status": "error",
+                    "duration": 0.0,
+                    "result": None,
+                    "detail": str(e),
+                    "critical": critical,
+                })
 
     return results
 
@@ -102,6 +129,13 @@ def run_pipeline(
     -------
     list of stage result dicts for summary display.
     """
+    # Generate a unique run ID for log correlation
+    run_id = uuid.uuid4().hex[:12]
+    from rewired.logging_config import set_run_id
+
+    set_run_id(run_id)
+    logger.info("Pipeline started (run_id=%s, dry_run=%s)", run_id, dry_run)
+
     all_stages: list[dict] = []
 
     # ── Stage 1: Data Fetch (parallel) ───────────────────────────────
@@ -144,6 +178,17 @@ def run_pipeline(
         console.print(f"[red]Circuit breaker: {len(critical_failures)} critical fetch(es) failed[/red]")
         for f in critical_failures:
             console.print(f"  [red]✗[/red] {f['name']}: {f['detail']}")
+
+        # If ALL critical stages failed, abort — pipeline output would be meaningless
+        if len(critical_failures) == len(fetch_stages):
+            logger.error("All critical fetch stages failed — aborting pipeline")
+            console.print("[red bold]All data fetches failed. Pipeline aborted.[/red bold]")
+            _write_audit_entry(
+                run_id=run_id, signal=None, suggestions_count=0,
+                stages=all_stages, total_duration=sum(s["duration"] for s in all_stages),
+                dry_run=dry_run,
+            )
+            return all_stages
 
     # Extract results by name
     data_map: dict[str, Any] = {}
@@ -193,8 +238,8 @@ def run_pipeline(
         all_stages.append(sizing_stage)
         suggestions = sizing_stage.get("result") or []
 
-        sells = [s for s in suggestions if s["action"] == "SELL"]
-        buys = [s for s in suggestions if s["action"] == "BUY"]
+        sells = [s for s in suggestions if s.action == "SELL"]
+        buys = [s for s in suggestions if s.action == "BUY"]
         console.print(f"  Generated {len(suggestions)} actions ({len(sells)} sells, {len(buys)} buys)")
     else:
         all_stages.append({
@@ -229,11 +274,11 @@ def run_pipeline(
         orders = []
         for s in suggestions:
             orders.append(OrderRequest(
-                ticker=s["ticker"],
-                side=OrderSide.BUY if s["action"] == "BUY" else OrderSide.SELL,
-                amount_eur=s["amount_eur"],
-                reason=s.get("reason", ""),
-                priority=s.get("priority", 0),
+                ticker=s.ticker,
+                side=OrderSide.BUY if s.action == "BUY" else OrderSide.SELL,
+                amount_eur=s.amount_eur,
+                reason=s.reason,
+                priority=s.priority,
             ))
 
         if dry_run:
@@ -279,4 +324,55 @@ def run_pipeline(
         f"{skip_count} skipped in {total_time:.1f}s"
     )
 
+    # ── Audit log (append JSON-line) ─────────────────────────────────
+    _write_audit_entry(
+        run_id=run_id,
+        signal=signal,
+        suggestions_count=len(suggestions),
+        stages=all_stages,
+        total_duration=total_time,
+        dry_run=dry_run,
+    )
+
     return all_stages
+
+
+def _write_audit_entry(
+    *,
+    run_id: str,
+    signal: Any,
+    suggestions_count: int,
+    stages: list[dict],
+    total_duration: float,
+    dry_run: bool,
+) -> None:
+    """Append a single JSON-line to data/audit_log.jsonl."""
+    import json
+
+    from rewired import get_data_dir
+
+    entry = {
+        "run_id": run_id,
+        "ts": datetime.now().isoformat(),
+        "signal_color": signal.overall_color.value if signal else None,
+        "veto_active": signal.veto_active if signal else False,
+        "stages": [
+            {
+                "name": s.get("name", ""),
+                "status": s.get("status", ""),
+                "duration": round(s.get("duration", 0.0), 3),
+                "detail": s.get("detail", ""),
+            }
+            for s in stages
+        ],
+        "suggestions_count": suggestions_count,
+        "dry_run": dry_run,
+        "total_duration_s": round(total_duration, 2),
+    }
+
+    audit_path = get_data_dir() / "audit_log.jsonl"
+    try:
+        with open(audit_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        logger.error("Failed to write audit log: %s", exc)

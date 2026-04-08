@@ -17,7 +17,7 @@ from typing import Any
 import yaml
 
 from rewired import get_config_dir
-from rewired.models.portfolio import Portfolio
+from rewired.models.portfolio import PieAllocation, Portfolio, Suggestion
 from rewired.models.signals import CompositeSignal, SignalColor
 from rewired.models.universe import Layer, Tier, Universe, Stock
 
@@ -28,10 +28,13 @@ _CASH_TICKER = "XEON.DE"   # Xtrackers EUR Overnight Rate Swap (XETRA, EUR)
 
 
 def _load_portfolio_config() -> dict:
-    """Load portfolio configuration."""
+    """Load and validate portfolio configuration."""
+    from rewired.models.config import PortfolioConfig
+
     config_path = get_config_dir() / "portfolio.yaml"
-    with open(config_path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    validated = PortfolioConfig.from_yaml(config_path)
+    # Return as dict for backward compatibility with solver internals
+    return validated.model_dump()
 
 
 # ── 5-Phase L×T Solver ───────────────────────────────────────────────────
@@ -41,11 +44,8 @@ def calculate_suggestions(
     portfolio: Portfolio,
     universe: Universe,
     signal: CompositeSignal,
-) -> list[dict]:
-    """Calculate position sizing suggestions via 2D L×T constraint solver.
-
-    Returns a list of dicts with keys: ticker, action, amount_eur, reason, priority.
-    """
+) -> list[Suggestion]:
+    """Calculate position sizing suggestions via 2D L×T constraint solver."""
     config = _load_portfolio_config()
     regime = signal.overall_color
     total = portfolio.total_value_eur
@@ -60,7 +60,7 @@ def calculate_suggestions(
     # Run the solver
     targets = _solve_lxt(config, universe, regime, total, current_positions)
 
-    suggestions: list[dict] = []
+    suggestions: list[Suggestion] = []
     freed_capital = 0.0
 
     # ── Generate sell suggestions ─────────────────────────────────────
@@ -72,22 +72,22 @@ def calculate_suggestions(
         delta = target_eur - pos.market_value_eur
         if delta < -min_pos:
             if target_eur <= 0:
-                suggestions.append({
-                    "ticker": stock.ticker,
-                    "action": "SELL",
-                    "amount_eur": round(pos.market_value_eur, 2),
-                    "reason": f"L{stock.layer.value}/T{stock.tier.value} target 0 @ {regime.value.upper()}",
-                    "priority": 1,
-                })
+                suggestions.append(Suggestion(
+                    ticker=stock.ticker,
+                    action="SELL",
+                    amount_eur=round(pos.market_value_eur, 2),
+                    reason=f"L{stock.layer.value}/T{stock.tier.value} target 0 @ {regime.value.upper()}",
+                    priority=1,
+                ))
                 freed_capital += pos.market_value_eur
             else:
-                suggestions.append({
-                    "ticker": stock.ticker,
-                    "action": "SELL",
-                    "amount_eur": round(abs(delta), 2),
-                    "reason": f"Trim to L{stock.layer.value}/T{stock.tier.value} target @ {regime.value.upper()}",
-                    "priority": 2,
-                })
+                suggestions.append(Suggestion(
+                    ticker=stock.ticker,
+                    action="SELL",
+                    amount_eur=round(abs(delta), 2),
+                    reason=f"Trim to L{stock.layer.value}/T{stock.tier.value} target @ {regime.value.upper()}",
+                    priority=2,
+                ))
                 freed_capital += abs(delta)
 
     # ── Generate buy suggestions ──────────────────────────────────────
@@ -100,13 +100,13 @@ def calculate_suggestions(
         if delta > min_pos:
             buy_amount = min(delta, available_cash)
             if buy_amount >= min_pos:
-                suggestions.append({
-                    "ticker": stock.ticker,
-                    "action": "BUY",
-                    "amount_eur": round(buy_amount, 2),
-                    "reason": f"L{stock.layer.value}/T{stock.tier.value} target @ {regime.value.upper()}",
-                    "priority": 3,
-                })
+                suggestions.append(Suggestion(
+                    ticker=stock.ticker,
+                    action="BUY",
+                    amount_eur=round(buy_amount, 2),
+                    reason=f"L{stock.layer.value}/T{stock.tier.value} target @ {regime.value.upper()}",
+                    priority=3,
+                ))
                 available_cash -= buy_amount
 
     # ── Hedge actions ─────────────────────────────────────────────────
@@ -116,21 +116,21 @@ def calculate_suggestions(
     hedge_delta = hedge_target - hedge_current
 
     if hedge_delta > min_pos:
-        suggestions.append({
-            "ticker": _HEDGE_TICKER,
-            "action": "BUY",
-            "amount_eur": round(hedge_delta, 2),
-            "reason": f"Hedge deployment: {regime.value.upper()} regime",
-            "priority": 2,
-        })
+        suggestions.append(Suggestion(
+            ticker=_HEDGE_TICKER,
+            action="BUY",
+            amount_eur=round(hedge_delta, 2),
+            reason=f"Hedge deployment: {regime.value.upper()} regime",
+            priority=2,
+        ))
     elif hedge_delta < -min_pos:
-        suggestions.append({
-            "ticker": _HEDGE_TICKER,
-            "action": "SELL",
-            "amount_eur": round(abs(hedge_delta), 2),
-            "reason": f"Hedge unwind: regime improved to {regime.value.upper()}",
-            "priority": 1,
-        })
+        suggestions.append(Suggestion(
+            ticker=_HEDGE_TICKER,
+            action="SELL",
+            amount_eur=round(abs(hedge_delta), 2),
+            reason=f"Hedge unwind: regime improved to {regime.value.upper()}",
+            priority=1,
+        ))
 
     # ── XEON cash actions ─────────────────────────────────────────────
     xeon_target = targets.get(_CASH_TICKER, 0.0)
@@ -140,24 +140,24 @@ def calculate_suggestions(
 
     if xeon_delta < -min_pos:
         # Sell XEON first to free capital for stock buys
-        suggestions.append({
-            "ticker": _CASH_TICKER,
-            "action": "SELL",
-            "amount_eur": round(abs(xeon_delta), 2),
-            "reason": f"Cash release: regime improved to {regime.value.upper()}",
-            "priority": 1,
-        })
+        suggestions.append(Suggestion(
+            ticker=_CASH_TICKER,
+            action="SELL",
+            amount_eur=round(abs(xeon_delta), 2),
+            reason=f"Cash release: regime improved to {regime.value.upper()}",
+            priority=1,
+        ))
     elif xeon_delta > min_pos:
         # Buy XEON last — park remaining capital
-        suggestions.append({
-            "ticker": _CASH_TICKER,
-            "action": "BUY",
-            "amount_eur": round(xeon_delta, 2),
-            "reason": f"Cash parking: {regime.value.upper()} regime",
-            "priority": 4,
-        })
+        suggestions.append(Suggestion(
+            ticker=_CASH_TICKER,
+            action="BUY",
+            amount_eur=round(xeon_delta, 2),
+            reason=f"Cash parking: {regime.value.upper()} regime",
+            priority=4,
+        ))
 
-    suggestions.sort(key=lambda s: s.get("priority", 99))
+    suggestions.sort(key=lambda s: s.priority)
     return suggestions
 
 
@@ -360,12 +360,8 @@ def calculate_pies_allocation(
     portfolio: Portfolio,
     universe: Universe,
     signal: CompositeSignal,
-) -> list[dict]:
-    """Calculate target Pies allocation for Trading 212.
-
-    Returns a list of dicts with: ticker, name, target_pct, target_eur,
-    current_pct, current_eur, delta_eur, action, layer, tier, reasoning.
-    """
+) -> list[PieAllocation]:
+    """Calculate target Pies allocation for Trading 212."""
     config = _load_portfolio_config()
     regime = signal.overall_color
     total = portfolio.total_value_eur
@@ -382,7 +378,7 @@ def calculate_pies_allocation(
     # Run the solver
     targets = _solve_lxt(config, universe, regime, total, current_positions)
 
-    allocations = []
+    allocations: list[PieAllocation] = []
     total_target_eur = 0.0
 
     for stock in universe.stocks:
@@ -401,19 +397,19 @@ def calculate_pies_allocation(
         else:
             action = "HOLD"
 
-        allocations.append({
-            "ticker": stock.ticker,
-            "name": stock.name,
-            "target_pct": target_pct,
-            "target_eur": round(target_eur, 2),
-            "current_pct": current_pct,
-            "current_eur": current_eur,
-            "delta_eur": delta_eur,
-            "action": action,
-            "layer": f"L{stock.layer.value}",
-            "tier": f"T{stock.tier.value}",
-            "reasoning": f"L{stock.layer.value}/T{stock.tier.value} @ {regime.value.upper()}",
-        })
+        allocations.append(PieAllocation(
+            ticker=stock.ticker,
+            name=stock.name,
+            target_pct=target_pct,
+            target_eur=round(target_eur, 2),
+            current_pct=current_pct,
+            current_eur=current_eur,
+            delta_eur=delta_eur,
+            action=action,
+            layer=f"L{stock.layer.value}",
+            tier=f"T{stock.tier.value}",
+            reasoning=f"L{stock.layer.value}/T{stock.tier.value} @ {regime.value.upper()}",
+        ))
 
     # Hedge row (DXS3.DE)
     hedge_target = targets.get(_HEDGE_TICKER, 0.0)
@@ -424,19 +420,19 @@ def calculate_pies_allocation(
     total_target_eur += hedge_target
 
     if hedge_target > 0 or hedge_current > 0:
-        allocations.append({
-            "ticker": _HEDGE_TICKER,
-            "name": "Xtrackers S&P 500 Inverse Daily (Hedge)",
-            "target_pct": h_pct,
-            "target_eur": round(hedge_target, 2),
-            "current_pct": round((hedge_current / total * 100) if total > 0 else 0.0, 1),
-            "current_eur": hedge_current,
-            "delta_eur": hedge_delta,
-            "action": "BUY" if hedge_delta > tolerance_eur else ("SELL" if hedge_delta < -tolerance_eur else "HOLD"),
-            "layer": "HEDGE",
-            "tier": "-",
-            "reasoning": f"Hedge: {regime.value.upper()} regime",
-        })
+        allocations.append(PieAllocation(
+            ticker=_HEDGE_TICKER,
+            name="Xtrackers S&P 500 Inverse Daily (Hedge)",
+            target_pct=h_pct,
+            target_eur=round(hedge_target, 2),
+            current_pct=round((hedge_current / total * 100) if total > 0 else 0.0, 1),
+            current_eur=hedge_current,
+            delta_eur=hedge_delta,
+            action="BUY" if hedge_delta > tolerance_eur else ("SELL" if hedge_delta < -tolerance_eur else "HOLD"),
+            layer="HEDGE",
+            tier="-",
+            reasoning=f"Hedge: {regime.value.upper()} regime",
+        ))
 
     # Cash row (XEON.DE)
     xeon_target = targets.get(_CASH_TICKER, 0.0)
@@ -446,19 +442,19 @@ def calculate_pies_allocation(
     xeon_delta = round(xeon_target - xeon_current, 2)
     total_target_eur += xeon_target
 
-    allocations.append({
-        "ticker": _CASH_TICKER,
-        "name": "Xtrackers EUR Overnight Rate (Cash)",
-        "target_pct": x_pct,
-        "target_eur": round(xeon_target, 2),
-        "current_pct": round((xeon_current / total * 100) if total > 0 else 0.0, 1),
-        "current_eur": xeon_current,
-        "delta_eur": xeon_delta,
-        "action": "BUY" if xeon_delta > tolerance_eur else ("SELL" if xeon_delta < -tolerance_eur else "HOLD"),
-        "layer": "CASH",
-        "tier": "-",
-        "reasoning": f"Cash: {regime.value.upper()} regime",
-    })
+    allocations.append(PieAllocation(
+        ticker=_CASH_TICKER,
+        name="Xtrackers EUR Overnight Rate (Cash)",
+        target_pct=x_pct,
+        target_eur=round(xeon_target, 2),
+        current_pct=round((xeon_current / total * 100) if total > 0 else 0.0, 1),
+        current_eur=xeon_current,
+        delta_eur=xeon_delta,
+        action="BUY" if xeon_delta > tolerance_eur else ("SELL" if xeon_delta < -tolerance_eur else "HOLD"),
+        layer="CASH",
+        tier="-",
+        reasoning=f"Cash: {regime.value.upper()} regime",
+    ))
 
     # Residual broker cash row (informational — should converge to 0)
     residual_pct = round(max(0.0, 100.0 - (total_target_eur / total * 100 if total > 0 else 0.0)), 1)
@@ -466,18 +462,18 @@ def calculate_pies_allocation(
     cash_current = round(portfolio.cash_eur, 2)
 
     if residual_pct > 0.1 or cash_current > 0:
-        allocations.append({
-            "ticker": "CASH",
-            "name": "Broker Cash (Residual)",
-            "target_pct": residual_pct,
-            "target_eur": residual_eur,
-            "current_pct": round(cash_current / total * 100, 1) if total > 0 else 0.0,
-            "current_eur": cash_current,
-            "delta_eur": round(residual_eur - cash_current, 2),
-            "action": "HOLD",
-            "layer": "-",
-            "tier": "-",
-            "reasoning": "Residual broker cash",
-        })
+        allocations.append(PieAllocation(
+            ticker="CASH",
+            name="Broker Cash (Residual)",
+            target_pct=residual_pct,
+            target_eur=residual_eur,
+            current_pct=round(cash_current / total * 100, 1) if total > 0 else 0.0,
+            current_eur=cash_current,
+            delta_eur=round(residual_eur - cash_current, 2),
+            action="HOLD",
+            layer="-",
+            tier="-",
+            reasoning="Residual broker cash",
+        ))
 
     return allocations

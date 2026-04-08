@@ -1,4 +1,4 @@
-"""Portfolio models: Position, Portfolio.
+"""Portfolio models: Position, Portfolio, Suggestion, PieAllocation.
 
 Portfolio data comes exclusively from the Trading 212 broker API
 (``data/broker.py``).  There is no local JSON persistence.
@@ -7,6 +7,7 @@ Portfolio data comes exclusively from the Trading 212 broker API
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -48,3 +49,27 @@ class Portfolio(BaseModel):
     @property
     def total_value_eur(self) -> float:
         return self.cash_eur + self.invested_eur
+
+
+class Suggestion(BaseModel):
+    """A typed portfolio action produced by the sizing solver."""
+    ticker: str
+    action: Literal["BUY", "SELL"]
+    amount_eur: float
+    reason: str = ""
+    priority: int = 0
+
+
+class PieAllocation(BaseModel):
+    """A typed row in the Pies allocation table."""
+    ticker: str
+    name: str
+    target_pct: float
+    target_eur: float
+    current_pct: float
+    current_eur: float
+    delta_eur: float
+    action: Literal["BUY", "SELL", "HOLD"]
+    layer: str
+    tier: str
+    reasoning: str

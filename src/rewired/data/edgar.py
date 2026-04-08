@@ -70,11 +70,18 @@ def fetch_earnings_filings(
 
 
 def _fetch_recent_8k(cik: str, ticker: str, max_filings: int) -> str:
-    """Fetch recent 8-K filing text for a single company."""
+    """Fetch recent 8-K filing text for a single company (with retry)."""
+    from rewired.resilience import retry_on_transient
+
+    @retry_on_transient
+    def _get_submissions():
+        url = f"https://data.sec.gov/submissions/CIK{cik}.json"
+        r = requests.get(url, headers=_HEADERS, timeout=15)
+        r.raise_for_status()
+        return r.json()
+
     # Step 1: Get recent filings list from submissions endpoint
-    url = f"https://data.sec.gov/submissions/CIK{cik}.json"
-    resp = requests.get(url, headers=_HEADERS, timeout=15)
-    resp.raise_for_status()
+    data = _get_submissions()
     data = resp.json()
 
     recent = data.get("filings", {}).get("recent", {})
@@ -160,8 +167,9 @@ def _load_cache() -> str | None:
 
 
 def _save_cache(text: str) -> None:
-    """Save EDGAR text to cache."""
+    """Save EDGAR text to cache (atomic write)."""
     path = _cache_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump({"timestamp": datetime.now().isoformat(), "text": text}, f)
+    from rewired.io import atomic_write
+
+    atomic_write(path, json.dumps({"timestamp": datetime.now().isoformat(), "text": text}))
