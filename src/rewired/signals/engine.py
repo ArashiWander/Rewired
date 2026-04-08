@@ -179,11 +179,13 @@ def _load_regime_state() -> RegimeState:
 
 
 def _save_regime_state(state: RegimeState) -> None:
-    """Persist regime state to data/regime_state.json."""
+    """Persist regime state to data/regime_state.json (atomic + locked)."""
     path = get_data_dir() / _REGIME_FILE
     try:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(state.model_dump_json(indent=2))
+        from rewired.io import atomic_write, file_lock
+
+        with file_lock(path):
+            atomic_write(path, state.model_dump_json(indent=2))
     except OSError as exc:
         logger.error("Failed to save regime state: %s", exc)
 
@@ -215,5 +217,7 @@ def _log_signal(signal: CompositeSignal) -> None:
             "to_color": current_color,
             "summary": signal.summary,
         })
-        with open(history_path, "w", encoding="utf-8") as f:
-            json.dump(history, f, indent=2)
+        from rewired.io import atomic_write, file_lock
+
+        with file_lock(history_path):
+            atomic_write(history_path, json.dumps(history, indent=2))

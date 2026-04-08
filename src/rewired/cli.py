@@ -11,17 +11,14 @@ console = Console()
 
 def _configure_logging(default_level: str = "WARNING") -> None:
     """Configure root logging once for CLI-driven entrypoints."""
-    level_name = os.environ.get("REWIRED_LOG_LEVEL", default_level).upper()
-    level = getattr(logging, level_name, logging.INFO)
-    root_logger = logging.getLogger()
+    import os
 
-    if not root_logger.handlers:
-        logging.basicConfig(
-            level=level,
-            format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        )
-    else:
-        root_logger.setLevel(level)
+    # Allow callers to set a default, but env var always wins
+    if "REWIRED_LOG_LEVEL" not in os.environ:
+        os.environ["REWIRED_LOG_LEVEL"] = default_level
+    from rewired.logging_config import configure_logging
+
+    configure_logging()
 
 
 @click.group()
@@ -281,11 +278,11 @@ def execute_cmd(dry_run, live, broker):
     orders = []
     for s in suggestions:
         orders.append(OrderRequest(
-            ticker=s["ticker"],
-            side=OrderSide.BUY if s["action"] == "BUY" else OrderSide.SELL,
-            amount_eur=s["amount_eur"],
-            reason=s.get("reason", ""),
-            priority=s.get("priority", 0),
+            ticker=s.ticker,
+            side=OrderSide.BUY if s.action == "BUY" else OrderSide.SELL,
+            amount_eur=s.amount_eur,
+            reason=s.reason,
+            priority=s.priority,
         ))
 
     print_execution_plan(orders, sig, dry_run=dry_run)
@@ -408,3 +405,52 @@ def actions():
     uni = load_universe()
     allocations = calculate_pies_allocation(pf, uni, sig)
     print_action_instructions(allocations, sig)
+
+
+@main.command()
+def health():
+    """Run a lightweight health check (for Docker HEALTHCHECK / monitoring).
+
+    Exit code 0 = healthy, 1 = unhealthy. Output is JSON.
+    """
+    import json
+    import sys
+
+    from rewired import get_config_dir, get_data_dir
+
+    checks = {}
+
+    # Config files loadable
+    try:
+        from rewired.models.config import load_and_validate_portfolio, load_and_validate_signals
+
+        load_and_validate_portfolio(get_config_dir())
+        load_and_validate_signals(get_config_dir())
+        checks["config"] = "ok"
+    except Exception as exc:
+        checks["config"] = f"error: {exc}"
+
+    # Data directory writable
+    try:
+        probe = get_data_dir() / ".health_probe"
+        probe.write_text("ok")
+        probe.unlink()
+        checks["data_dir"] = "ok"
+    except Exception as exc:
+        checks["data_dir"] = f"error: {exc}"
+
+    # API keys present
+    import os
+
+    for key in ("FRED_API_KEY", "GEMINI_API_KEY", "FMP_API_KEY"):
+        val = os.environ.get(key, "")
+        if val and not val.startswith("your_"):
+            checks[key] = "present"
+        else:
+            checks[key] = "missing"
+
+    healthy = checks["config"] == "ok" and checks["data_dir"] == "ok"
+    checks["status"] = "healthy" if healthy else "unhealthy"
+
+    console.print(json.dumps(checks, indent=2))
+    sys.exit(0 if healthy else 1)

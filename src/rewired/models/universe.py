@@ -137,16 +137,21 @@ def save_universe(universe: Universe, config_path: Path | None = None) -> None:
             entry["last_tier_change"] = s.last_tier_change.isoformat()
         entries.append(entry)
 
-    with open(config_path, "w", encoding="utf-8") as f:
-        f.write("# Rewired Index Stock Universe\n")
-        f.write("# Each stock has a Layer (L1-L5) and Tier (T1-T4) coordinate\n\n")
-        yaml.dump(
-            {"stocks": entries},
-            f,
-            default_flow_style=False,
-            allow_unicode=True,
-            sort_keys=False,
-        )
+    import io as _io
+
+    from rewired.io import atomic_write
+
+    buf = _io.StringIO()
+    buf.write("# Rewired Index Stock Universe\n")
+    buf.write("# Each stock has a Layer (L1-L5) and Tier (T1-T4) coordinate\n\n")
+    yaml.dump(
+        {"stocks": entries},
+        buf,
+        default_flow_style=False,
+        allow_unicode=True,
+        sort_keys=False,
+    )
+    atomic_write(config_path, buf.getvalue())
 
 
 # ── Automated onboarding ─────────────────────────────────────────────────

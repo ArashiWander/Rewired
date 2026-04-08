@@ -23,10 +23,13 @@ from rewired.models.signals import SignalColor, SignalReading
 
 
 def _load_signal_config() -> dict:
-    """Load signal rules configuration (fresh each call, per convention)."""
+    """Load and validate signal rules configuration (fresh each call)."""
+    from rewired.models.config import SignalRulesConfig
+
     config_path = get_config_dir() / "signals.yaml"
-    with open(config_path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    validated = SignalRulesConfig.from_yaml(config_path)
+    # Return as dict for backward compatibility with rules engine internals
+    return validated.model_dump()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────

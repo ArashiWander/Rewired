@@ -136,14 +136,19 @@ def print_suggestions(suggestions: list, composite) -> None:
     table.add_column("Reason", width=36)
 
     for s in suggestions:
-        action_style = "green" if s["action"] == "BUY" else "red"
-        phase = phase_labels.get(s.get("priority"), "?")
+        action = s.action if hasattr(s, "action") else s["action"]
+        ticker = s.ticker if hasattr(s, "ticker") else s["ticker"]
+        amount = s.amount_eur if hasattr(s, "amount_eur") else s["amount_eur"]
+        priority = s.priority if hasattr(s, "priority") else s.get("priority", 0)
+        reason = s.reason if hasattr(s, "reason") else s.get("reason", "")
+        action_style = "green" if action == "BUY" else "red"
+        phase = phase_labels.get(priority, "?")
         table.add_row(
-            s["ticker"],
-            f"[{action_style}]{s['action']}[/{action_style}]",
-            f"{s['amount_eur']:.2f} {EUR}",
+            ticker,
+            f"[{action_style}]{action}[/{action_style}]",
+            f"{amount:.2f} {EUR}",
             phase,
-            s["reason"],
+            reason,
         )
 
     console.print()

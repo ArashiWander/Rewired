@@ -44,15 +44,22 @@ def _get(endpoint: str, params: dict[str, Any] | None = None) -> Any:
     """Execute a GET against the FMP **stable** API and return parsed JSON.
 
     The stable API uses ``/stable/{endpoint}?symbol=X&apikey=…`` style.
+    Retries on transient network errors (timeouts, connection resets).
     Raises ``RuntimeError`` on HTTP errors so callers can decide how to
     degrade.
     """
-    params = dict(params or {})
-    params["apikey"] = _api_key()
-    url = f"{_BASE_URL}/{endpoint}"
-    resp = requests.get(url, params=params, timeout=_TIMEOUT)
-    resp.raise_for_status()
-    return resp.json()
+    from rewired.resilience import retry_on_transient
+
+    @retry_on_transient
+    def _do_get():
+        params_ = dict(params or {})
+        params_["apikey"] = _api_key()
+        url = f"{_BASE_URL}/{endpoint}"
+        resp = requests.get(url, params=params_, timeout=_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json()
+
+    return _do_get()
 
 
 # ── company profile ─────────────────────────────────────────────────────
