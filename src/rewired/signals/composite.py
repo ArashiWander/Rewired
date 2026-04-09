@@ -36,7 +36,8 @@ def compute_composite(
     Evaluation order (first match wins):
       0. AI_HEALTH RED        -> global RED (absolute veto)
       1. AI_HEALTH ORANGE     -> cap at ORANGE (AI uncertainty)
-      2. MACRO GREEN          -> GREEN (contrarian: strong fundamentals
+      2. MACRO GREEN + SENT RED -> YELLOW (liquidity crisis cap)
+      2. MACRO GREEN (else)   -> GREEN (contrarian: strong fundamentals
          override market fear)
       3. MACRO RED            -> ORANGE floor (severe weakness)
       4. MACRO ORANGE + Sentiment GREEN/YELLOW -> ORANGE (complacency trap)
@@ -88,9 +89,16 @@ def compute_composite(
         return SignalColor.ORANGE, False, transparency
 
     # -- Rule 2: MACRO GREEN -> GREEN (contrarian core) ----------------
-    # Strong fundamentals override market sentiment.  This is THE key
-    # divergence rule from the image philosophy.
+    # Strong fundamentals override market sentiment — the key divergence
+    # rule from the philosophy.  EXCEPTION: sentiment RED signals a
+    # liquidity crisis (VXN > 35 + backwardation), not ordinary fear.
+    # In that case cap at YELLOW: the contrarian rule applies to
+    # divergence, not to systemic breakdown.
     if macro_color == SignalColor.GREEN:
+        if sentiment_color == SignalColor.RED:
+            transparency["rule_matched"] = "MACRO_GREEN_SENTIMENT_CRISIS_CAP"
+            transparency["final_color"] = SignalColor.YELLOW.value
+            return SignalColor.YELLOW, False, transparency
         transparency["rule_matched"] = "MACRO_GREEN_CONTRARIAN"
         transparency["final_color"] = SignalColor.GREEN.value
         return SignalColor.GREEN, False, transparency

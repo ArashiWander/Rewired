@@ -107,12 +107,21 @@ def evaluate_macro_rules(readings: list[SignalReading]) -> tuple[SignalColor, st
             )
 
     # ── GREEN: Goldilocks ─────────────────────────────────────────────
-    if pmi is not None:
-        pce_ok = pce is None or pce.value <= cfg.get("green", {}).get("pce_mom_max", 0.2)
-        if pmi.value > 50 and pce_ok:
+    # Require PCE confirmation of disinflation OR yield curve safety net.
+    # Missing PCE alone is NOT enough to unlock GREEN — the stagflation
+    # signal (ORANGE) depends on PCE+curve, so a PCE outage must not
+    # silently permit the most aggressive state.
+    pce_mom_max = cfg.get("green", {}).get("pce_mom_max", 0.2)
+    if pmi is not None and pmi.value > 50:
+        if pce is not None and pce.value <= pce_mom_max:
             return SignalColor.GREEN, (
-                f"Goldilocks: PMI {pmi.value:.1f} > 50"
-                + (f", Core PCE {pce.value:.2f}% MoM in line" if pce else "")
+                f"Goldilocks: PMI {pmi.value:.1f} > 50, "
+                f"Core PCE {pce.value:.2f}% MoM in line"
+            )
+        if pce is None and yield_curve is not None and yield_curve.value >= 0:
+            return SignalColor.GREEN, (
+                f"Goldilocks (PCE unavailable): PMI {pmi.value:.1f} > 50, "
+                f"yield curve {yield_curve.value:+.2f}% not inverted"
             )
 
     # ── Default: no clear rule match ──────────────────────────────────
