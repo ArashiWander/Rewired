@@ -32,14 +32,34 @@ class TestMacroRules:
         assert color == SignalColor.GREEN
         assert "Goldilocks" in explanation or "PMI" in explanation
 
-    def test_green_pmi_above_50_pce_missing(self):
-        """GREEN when PMI > 50 and PCE data is absent."""
+    def test_green_pmi_high_pce_missing_curve_normal(self):
+        """GREEN when PMI > 50, PCE missing, but yield curve is non-inverted (safety net)."""
+        readings = [
+            make_reading("ISM PMI", 53.0, metadata={"consecutive_below_threshold": 0}),
+            make_reading("Retail Sales MoM", 0.5),
+            make_reading("Yield Curve (10Y-2Y)", 0.3),
+        ]
+        color, _ = evaluate_macro_rules(readings)
+        assert color == SignalColor.GREEN
+
+    def test_missing_pce_no_yield_curve_not_green(self):
+        """PMI > 50, PCE missing, yield curve missing → NOT GREEN (loophole closed)."""
         readings = [
             make_reading("ISM PMI", 53.0, metadata={"consecutive_below_threshold": 0}),
             make_reading("Retail Sales MoM", 0.5),
         ]
         color, _ = evaluate_macro_rules(readings)
-        assert color == SignalColor.GREEN
+        assert color != SignalColor.GREEN
+
+    def test_missing_pce_inverted_curve_not_green(self):
+        """PMI > 50, PCE missing, yield curve inverted → NOT GREEN (loophole closed)."""
+        readings = [
+            make_reading("ISM PMI", 53.0, metadata={"consecutive_below_threshold": 0}),
+            make_reading("Retail Sales MoM", 0.5),
+            make_reading("Yield Curve (10Y-2Y)", -0.5),
+        ]
+        color, _ = evaluate_macro_rules(readings)
+        assert color != SignalColor.GREEN
 
     # ── RED ──────────────────────────────────────────────────────────
 

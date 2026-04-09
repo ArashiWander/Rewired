@@ -21,9 +21,13 @@ from rewired.models.signals import (
     RegimeState,
     SignalCategory,
     SignalColor,
+    _COLOR_RANK,
     color_is_better,
     color_is_worse,
 )
+
+# Inverse of _COLOR_RANK for stepping one rank at a time during upgrades.
+_RANK_TO_COLOR: dict[int, SignalColor] = {v: k for k, v in _COLOR_RANK.items()}
 from rewired.signals.composite import compute_composite
 from rewired.signals.macro_signal import calculate_macro_signal
 from rewired.signals.sentiment_signal import calculate_sentiment_signal
@@ -135,24 +139,32 @@ def _apply_hysteresis(
         state.last_updated = today
         return current
 
-    # Upgrade: needs confirmation
-    if state.pending_upgrade == raw_color:
+    # Upgrade: clamp target to one rank above current, needs confirmation.
+    # Prevents multi-level jumps (e.g. RED→GREEN in 3 days) by forcing the
+    # regime to walk the ladder: RED→ORANGE→YELLOW→GREEN, each step
+    # requiring its own 3-day confirmation window.
+    current_rank = _COLOR_RANK[current]
+    raw_rank = _COLOR_RANK[raw_color]
+    clamped_target = _RANK_TO_COLOR[min(raw_rank, current_rank + 1)]
+
+    if state.pending_upgrade == clamped_target:
         # Continue counting (only increment if new day)
         if today > state.last_updated:
             state.consecutive_days += 1
         if state.consecutive_days >= _UPGRADE_CONFIRMATION_DAYS:
             logger.info(
-                "Regime upgrade confirmed: %s → %s (after %d days)",
-                current.value, raw_color.value, state.consecutive_days,
+                "Regime upgrade confirmed: %s → %s (after %d days; raw=%s)",
+                current.value, clamped_target.value, state.consecutive_days,
+                raw_color.value,
             )
-            state.current_regime = raw_color
+            state.current_regime = clamped_target
             state.pending_upgrade = None
             state.consecutive_days = 0
             state.last_updated = today
-            return raw_color
+            return clamped_target
     else:
         # New upgrade target — start counting
-        state.pending_upgrade = raw_color
+        state.pending_upgrade = clamped_target
         state.consecutive_days = 1
 
     state.last_updated = today

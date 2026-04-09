@@ -119,11 +119,27 @@ class TestVetoOverride:
 class TestDivergenceLogic:
     """Core contrarian divergence rules — the heart of the philosophy."""
 
-    def test_macro_green_contrarian(self):
-        """MACRO GREEN + SENTIMENT RED → GREEN (contrarian core rule)."""
+    def test_macro_green_sentiment_red_caps_yellow(self):
+        """MACRO GREEN + SENTIMENT RED → YELLOW (liquidity crisis cap).
+
+        The contrarian rule is carved out for sentiment RED — a genuine
+        liquidity crisis (VXN > 35 + backwardation) is no longer ignored.
+        """
         cats = {
             SignalCategory.MACRO: make_category_signal(SignalCategory.MACRO, SignalColor.GREEN),
             SignalCategory.SENTIMENT: make_category_signal(SignalCategory.SENTIMENT, SignalColor.RED),
+            SignalCategory.AI_HEALTH: make_category_signal(SignalCategory.AI_HEALTH, SignalColor.GREEN),
+        }
+        color, veto, transparency = compute_composite(cats)
+        assert color == SignalColor.YELLOW
+        assert veto is False
+        assert transparency["rule_matched"] == "MACRO_GREEN_SENTIMENT_CRISIS_CAP"
+
+    def test_macro_green_sentiment_yellow_still_contrarian(self):
+        """MACRO GREEN + SENTIMENT YELLOW → GREEN (contrarian still fires)."""
+        cats = {
+            SignalCategory.MACRO: make_category_signal(SignalCategory.MACRO, SignalColor.GREEN),
+            SignalCategory.SENTIMENT: make_category_signal(SignalCategory.SENTIMENT, SignalColor.YELLOW),
             SignalCategory.AI_HEALTH: make_category_signal(SignalCategory.AI_HEALTH, SignalColor.GREEN),
         }
         color, veto, transparency = compute_composite(cats)
